@@ -29,6 +29,8 @@ dev = [
 ]
 build = [
     "pyinstaller>=6.10",
+    # Les archives Ollama récentes sont compressées en zstandard.
+    "zstandard>=0.22",
 ]
 
 [project.scripts]
