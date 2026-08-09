@@ -24,7 +24,7 @@ PORTABLE_FILENAME = "cairn.ini"
 
 # Clés persistées, avec le nom de variable d'environnement correspondant.
 FIELDS: dict[str, str] = {
-    "db_dsn": "CAIRN_DB_DSN",
+    "db_path": "CAIRN_DB_PATH",
     "secret_key": "CAIRN_SECRET_KEY",
     "file_root": "CAIRN_FILE_ROOT",
     "garmin_email": "CAIRN_GARMIN_EMAIL",
@@ -39,7 +39,7 @@ FIELDS: dict[str, str] = {
 }
 
 # Champs qui ne doivent jamais apparaître en clair dans un journal.
-SENSITIVE = {"secret_key", "strava_client_secret", "db_dsn", "discord_webhook_url"}
+SENSITIVE = {"secret_key", "strava_client_secret", "discord_webhook_url"}
 
 
 def app_directory() -> Path:
@@ -55,6 +55,24 @@ def portable_file() -> Path:
 
 def is_portable() -> bool:
     return portable_file().exists()
+
+
+def default_database() -> Path:
+    """Emplacement du fichier de données.
+
+    En mode portable, à côté de l'application ; sinon dans le dossier de
+    données du système, pour ne pas dépendre du droit d'écriture là où
+    l'exécutable a été posé.
+    """
+    if is_portable():
+        return app_directory() / "cairn.db"
+
+    from PySide6.QtCore import QStandardPaths
+
+    root = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppDataLocation
+    )
+    return Path(root or Path.home() / ".local/share/Cairn") / "cairn.db"
 
 
 def _store() -> QSettings:
@@ -85,7 +103,12 @@ def _protect(path: Path) -> None:
 
 def load() -> dict[str, str]:
     store = _store()
-    return {key: str(store.value(key, "") or "") for key in FIELDS}
+    values = {key: str(store.value(key, "") or "") for key in FIELDS}
+    # Sans choix explicite, l'application se donne un emplacement plutôt que
+    # de réclamer une saisie dès le premier lancement.
+    if not values.get("db_path"):
+        values["db_path"] = str(default_database())
+    return values
 
 
 def save(values: dict[str, str]) -> None:
@@ -108,8 +131,9 @@ def apply_to_environment() -> None:
     from cairn.config import reset_settings
     from cairn.db import close_pool
 
+    stored = load()
     for key, env_name in FIELDS.items():
-        value = _store().value(key, "")
+        value = stored.get(key)
         if value:
             os.environ[env_name] = str(value)
         else:

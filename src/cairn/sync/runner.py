@@ -2,7 +2,7 @@
 
 Les deux sources sont indépendantes : si Garmin échoue, Strava passe quand
 même, et inversement. Chaque source a sa propre ligne dans `sync_run`, ce qui
-rend l'historique lisible dans Grafana.
+rend l'historique lisible dans la page Synchronisation.
 """
 
 from __future__ import annotations

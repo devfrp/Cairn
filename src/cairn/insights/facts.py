@@ -117,7 +117,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
                coalesce(sum(distance_m), 0) AS distance_m,
                coalesce(sum(elevation_gain_m), 0) AS elevation_m,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity WHERE local_date BETWEEN %s AND %s
+          FROM activity WHERE local_date BETWEEN ? AND ?
         """,
         (start, end),
     )
@@ -140,7 +140,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
             SELECT sport, count(*) AS sessions,
                    coalesce(sum(elapsed_s), 0) AS duration_s,
                    coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-              FROM activity WHERE local_date BETWEEN %s AND %s
+              FROM activity WHERE local_date BETWEEN ? AND ?
              GROUP BY sport ORDER BY load DESC
             """,
             (start, end),
@@ -152,7 +152,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
         SELECT name, sport, local_date, elapsed_s, distance_m, elevation_gain_m,
                coalesce(training_load, trimp) AS load
           FROM activity
-         WHERE local_date BETWEEN %s AND %s
+         WHERE local_date BETWEEN ? AND ?
            AND coalesce(training_load, trimp) IS NOT NULL
          ORDER BY coalesce(training_load, trimp) DESC LIMIT 1
         """,
@@ -172,7 +172,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load,
                coalesce(sum(elapsed_s), 0) AS duration_s
-          FROM activity WHERE local_date BETWEEN %s AND %s
+          FROM activity WHERE local_date BETWEEN ? AND ?
         """,
         (start - dt.timedelta(days=7), start - dt.timedelta(days=1)),
     )
@@ -189,7 +189,7 @@ def _collect_recovery(facts: WeeklyFacts, start: dt.date, end: dt.date) -> None:
     hrv = fetch_one(
         """
         SELECT avg(avg_hrv_ms) AS mean FROM hrv_night
-         WHERE day BETWEEN %s AND %s AND avg_hrv_ms IS NOT NULL
+         WHERE day BETWEEN ? AND ? AND avg_hrv_ms IS NOT NULL
         """,
         (start, end),
     )
@@ -197,23 +197,22 @@ def _collect_recovery(facts: WeeklyFacts, start: dt.date, end: dt.date) -> None:
 
     # Ligne de base : les soixante jours qui précèdent la semaine résumée,
     # pour comparer la semaine à l'habitude et non à elle-même.
-    baseline = fetch_one(
-        """
-        SELECT avg(avg_hrv_ms) AS hrv, avg(resting_hr) AS rhr
-          FROM hrv_night h
-          FULL JOIN daily_wellness w ON w.day = h.day
-         WHERE coalesce(h.day, w.day) BETWEEN %s AND %s
-        """,
-        (start - dt.timedelta(days=60), start - dt.timedelta(days=1)),
+    # SQLite ne connaît pas FULL JOIN : deux requêtes sont plus claires
+    # qu'une jointure contournée, et les deux séries sont indépendantes.
+    window = (start - dt.timedelta(days=60), start - dt.timedelta(days=1))
+    hrv_base = fetch_one(
+        "SELECT avg(avg_hrv_ms) AS v FROM hrv_night WHERE day BETWEEN ? AND ?", window
     )
-    if baseline:
-        facts.hrv_baseline = _round(baseline["hrv"])
-        facts.rhr_baseline = _round(baseline["rhr"])
+    rhr_base = fetch_one(
+        "SELECT avg(resting_hr) AS v FROM daily_wellness WHERE day BETWEEN ? AND ?", window
+    )
+    facts.hrv_baseline = _round(hrv_base["v"] if hrv_base else None)
+    facts.rhr_baseline = _round(rhr_base["v"] if rhr_base else None)
 
     rhr = fetch_one(
         """
         SELECT avg(resting_hr) AS mean FROM daily_wellness
-         WHERE day BETWEEN %s AND %s AND resting_hr IS NOT NULL
+         WHERE day BETWEEN ? AND ? AND resting_hr IS NOT NULL
         """,
         (start, end),
     )
@@ -222,8 +221,8 @@ def _collect_recovery(facts: WeeklyFacts, start: dt.date, end: dt.date) -> None:
     sleep = fetch_one(
         """
         SELECT avg(score) AS score, avg(duration_s) AS duration,
-               count(*) FILTER (WHERE duration_s < 25200) AS short_nights
-          FROM sleep_session WHERE sleep_date BETWEEN %s AND %s
+               sum(CASE WHEN duration_s < 25200 THEN 1 ELSE 0 END) AS short_nights
+          FROM sleep_session WHERE sleep_date BETWEEN ? AND ?
         """,
         (start, end),
     )
@@ -240,7 +239,7 @@ def _hrv_streak(end: dt.date, baseline: float | None) -> tuple[float | None, int
     rows = fetch_all(
         """
         SELECT day, avg_hrv_ms FROM hrv_night
-         WHERE day <= %s AND avg_hrv_ms IS NOT NULL
+         WHERE day <= ? AND avg_hrv_ms IS NOT NULL
          ORDER BY day DESC LIMIT 14
         """,
         (end,),

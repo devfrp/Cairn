@@ -3,7 +3,7 @@
 *[English version](README.en.md)*
 
 Suivi santé et sport auto-hébergé. Cairn agrège les données Garmin Connect et
-Strava dans une base PostgreSQL que vous contrôlez entièrement, et croise
+Strava dans un fichier que vous contrôlez entièrement, et croise
 récupération et charge d'entraînement — ce qu'aucun des deux services ne fait,
 puisqu'ils ne se parlent pas.
 
@@ -19,7 +19,8 @@ la synchronisation.
   les métriques — capteurs côté Garmin, matériel et segments côté Strava.
 - **Croisement récupération × charge** : sommeil, HRV et FC de repos d'une nuit
   en regard des sorties du jour.
-- **Dashboards Grafana** versionnés dans le repo.
+- **Analyse intégrée** : temps par zone de fréquence cardiaque, volume par
+  discipline, charge semaine après semaine.
 - **Résumé hebdomadaire** rédigé par un modèle Ollama qui tourne chez vous,
   livrable sur Discord.
 
@@ -27,10 +28,9 @@ Site du projet : <https://devfrp.github.io/Cairn/>
 
 ## Installer l'application
 
-Cairn se compose de deux morceaux : une **base PostgreSQL** qui héberge vos
-données, et une **application de bureau** qui s'y connecte. L'application est publiée en paquet autonome —
-AppImage sous Linux, archive sous Windows, `.dmg` sous macOS — sans
-interpréteur Python ni moteur de langage à installer :
+Cairn est une **application de bureau autonome** : elle transporte sa base de
+données, son moteur de langage et son modèle. Publiée en AppImage sous Linux,
+archive sous Windows et `.dmg` sous macOS, sans rien d'autre à installer :
 
 ```bash
 curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
@@ -50,63 +50,34 @@ tâches planifiées ; elle est aussi incluse dans l'AppImage et le dmg.
 
 ## Prérequis
 
-- Une machine avec PostgreSQL 16 et l'extension TimescaleDB (un conteneur
-  LXC Debian fait très bien l'affaire).
 - Un compte Garmin Connect.
 - Une application Strava — à créer sur <https://www.strava.com/settings/api>.
 
-## Installer la base
+## Premier démarrage
 
-Sur Debian ou Ubuntu, avec les dépôts officiels de TimescaleDB :
+Il n'y a rien à préparer. À l'ouverture, la page **Réglages** propose un
+emplacement pour le fichier de données, génère la clé qui chiffrera les
+jetons, installe le schéma et relie les comptes.
 
-```bash
-sudo apt install -y postgresql-16 postgresql-16-timescaledb
-sudo timescaledb-tune --quiet --yes && sudo systemctl restart postgresql
-```
-
-Créer le rôle et la base :
-
-```bash
-sudo -u postgres createuser --pwprompt cairn
-sudo -u postgres createdb --owner=cairn cairn
-```
-
-L'application de bureau suffit ensuite : sa page **Réglages** renseigne la
-chaîne de connexion, génère la clé de chiffrement et installe le schéma d'un
-bouton.
+Le fichier `cairn.db` contient toutes vos données. Le sauvegarder, c'est
+sauvegarder Cairn ; le copier sur une autre machine, c'est déménager.
 
 ## Synchronisation automatique
 
 L'application synchronise à la demande. Pour une passe nocturne sans
-intervention, installez le service sur la machine qui héberge la base :
+intervention, sur une machine qui reste allumée :
 
 ```bash
 sudo install -d -o cairn -g cairn /opt/cairn /var/lib/cairn
 sudo -u cairn python3 -m venv /opt/cairn/venv
 sudo -u cairn /opt/cairn/venv/bin/pip install 'cairn @ git+https://github.com/devfrp/Cairn'
-```
-
-Créer `/etc/cairn/cairn.env` à partir de [.env.example](.env.example) — il
-contient la clé de chiffrement, donc en `0600` :
-
-```bash
 sudo install -D -m 600 .env.example /etc/cairn/cairn.env
-sudo /opt/cairn/venv/bin/cairn keygen
-```
-
-Reporter la clé dans le fichier, puis activer le service :
-
-```bash
 sudo cp packaging/systemd/cairn.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now cairn
 ```
 
-## Graphiques détaillés
-
-L'application montre l'essentiel. Pour des graphiques fouillés, Grafana se
-branche directement sur la base : le dossier [grafana/](grafana/) contient la
-source de données et les dashboards, à copier dans
-`/etc/grafana/provisioning/`.
+Le service partage le fichier de données de l'application : indiquez le même
+chemin dans `CAIRN_DB_PATH`.
 
 ## Authentification
 
@@ -206,13 +177,9 @@ src/cairn/
   sources/         clients Garmin (garth) et Strava (OAuth2 + quota)
   sync/            mappers, déduplication, upserts, orchestration
 packaging/         recettes PyInstaller, icônes, unité systemd
-grafana/           source de données et dashboards provisionnés
 ```
 
-La base est organisée en trois couches : `raw` (payloads bruts, source de
-vérité), `public` (modèle normalisé) et `marts` (agrégats pour Grafana). Le
-brut n'est jamais jeté : si un mapper doit être corrigé, la transformation se
-rejoue sans retaper les API.
-
-Les séries temporelles (streams d'activité, mesures intra-journée) sont des
-hypertables TimescaleDB compressées.
+La base est un fichier SQLite organisé en trois couches, marquées par le
+préfixe des tables : `raw_` (payloads bruts, source de vérité), sans préfixe
+(modèle normalisé) et `marts_` (agrégats). Le brut n'est jamais jeté : si un
+mapper doit être corrigé, la transformation se rejoue sans retaper les API.

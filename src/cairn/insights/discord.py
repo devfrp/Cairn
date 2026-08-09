@@ -53,11 +53,12 @@ def send(webhook_url: str, content: str, timeout: float = 15.0) -> None:
 def mark_delivered(start: dt.date) -> None:
     from cairn.db import connection
 
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
+    with connection() as conn:
+        conn.execute(
             """
-            UPDATE llm_summary SET delivered_at = now(), delivery_channel = 'discord'
-             WHERE period_kind = 'weekly' AND period_start = %s
+            UPDATE llm_summary
+               SET delivered_at = datetime('now'), delivery_channel = 'discord'
+             WHERE period_kind = 'weekly' AND period_start = ?
             """,
             (start,),
         )

@@ -62,13 +62,18 @@ def db_migrations() -> None:
 
 @db_app.command("check")
 def db_check() -> None:
-    """Vérifie la connexion et affiche la version de TimescaleDB."""
-    from cairn.db import fetch_one
+    """Vérifie que le fichier de données est lisible et donne sa taille."""
+    import sqlite3
 
-    version = fetch_one("SELECT version() AS v")
-    typer.echo(version["v"] if version else "?")
-    ts = fetch_one("SELECT extversion AS v FROM pg_extension WHERE extname = 'timescaledb'")
-    typer.echo(f"TimescaleDB : {ts['v'] if ts else 'absent'}")
+    from cairn.db import database_path, fetch_one
+
+    path = database_path()
+    typer.echo(f"Fichier : {path}")
+    typer.echo(f"Moteur  : SQLite {sqlite3.sqlite_version}")
+    if path.exists():
+        typer.echo(f"Taille  : {path.stat().st_size / 1e6:.1f} Mo")
+    row = fetch_one("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'")
+    typer.echo(f"Tables  : {row['n'] if row else 0}")
 
 
 # ---------------------------------------------------------------------

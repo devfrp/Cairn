@@ -10,13 +10,6 @@ import structlog
 
 def configure(level: str = "INFO") -> None:
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level.upper())
-
-    # Le pool psycopg journalise chaque tentative de reconnexion. Quand la
-    # base est absente, ça noie le message d'erreur utile sous huit répétitions
-    # du même texte. On ne garde ce détail qu'en mode debug.
-    if level.upper() != "DEBUG":
-        logging.getLogger("psycopg.pool").setLevel(logging.ERROR)
-
     renderer = (
         structlog.dev.ConsoleRenderer()
         if sys.stdout.isatty()

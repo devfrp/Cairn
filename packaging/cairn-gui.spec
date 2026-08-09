@@ -22,7 +22,7 @@ le paquet doublerait de taille pour rien.
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent
 VENDOR = ROOT / "packaging" / "vendor"
@@ -45,15 +45,6 @@ for source, target in (
 
 binaries = []
 hiddenimports = collect_submodules("cairn")
-
-for package in ("psycopg", "psycopg_binary", "psycopg_pool"):
-    try:
-        pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
-    except Exception:  # noqa: BLE001 — psycopg_binary manque sur certaines plateformes
-        continue
-    datas += pkg_datas
-    binaries += pkg_binaries
-    hiddenimports += pkg_hidden
 
 QT_UNUSED = [
     "PySide6.Qt3DAnimation", "PySide6.Qt3DCore", "PySide6.Qt3DExtras",

@@ -3,8 +3,8 @@
 Trois choses sont produites à partir du .fit :
 
 * les points seconde par seconde dans `activity_stream` (hypertable) ;
-* le temps passé par zone de FC, précalculé pour que Grafana n'ait pas à
-  rescanner la série à chaque affichage ;
+* le temps passé par zone de FC, précalculé pour que l'affichage n'ait pas
+  à rescanner la série à chaque ouverture ;
 * un TRIMP, qui sert de charge d'entraînement quand Garmin n'en fournit pas
   (activité importée dans Strava depuis un autre appareil, par exemple).
 """
@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 
 from cairn.config import get_settings
-from cairn.db import connection
+from cairn.db import connection, fetch_all
 from cairn.sync import repo
 from cairn.sync.fit import parse_fit, to_stream_rows
 
@@ -55,27 +55,24 @@ def zones_from_hr_max(hr_max: int, hr_rest: int | None = None) -> list[tuple[int
 
 def get_zones(conn, athlete_id: int, day: dt.date) -> list[tuple[int, int, int]]:
     """Zones en vigueur à cette date, ou dérivées de la FC max si besoin."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, hr_max, hr_rest FROM hr_zone_set
-             WHERE athlete_id = %s AND valid_from <= %s
-             ORDER BY valid_from DESC LIMIT 1
-            """,
-            (athlete_id, day),
-        )
-        zone_set = cur.fetchone()
-        if zone_set is None:
-            return []
+    zone_set = conn.execute(
+        """
+        SELECT id, hr_max, hr_rest FROM hr_zone_set
+         WHERE athlete_id = ? AND valid_from <= ?
+         ORDER BY valid_from DESC LIMIT 1
+        """,
+        (athlete_id, day),
+    ).fetchone()
+    if zone_set is None:
+        return []
 
-        cur.execute(
-            """
-            SELECT zone_index, min_bpm, max_bpm FROM hr_zone
-             WHERE zone_set_id = %s ORDER BY zone_index
-            """,
-            (zone_set["id"],),
-        )
-        rows = cur.fetchall()
+    rows = conn.execute(
+        """
+        SELECT zone_index, min_bpm, max_bpm FROM hr_zone
+         WHERE zone_set_id = ? ORDER BY zone_index
+        """,
+        (zone_set["id"],),
+    ).fetchall()
 
     if rows:
         return [(r["zone_index"], r["min_bpm"], r["max_bpm"]) for r in rows]
@@ -156,42 +153,39 @@ def ingest_streams(conn, activity_id: int, records: list[dict[str, Any]]) -> int
 
     Le remplacement est intégral : re-parser un .fit après correction du
     parser doit donner exactement le même résultat qu'un premier passage.
-    TimescaleDB décompresse à la volée les chunks concernés si l'activité est
-    ancienne.
     """
     rows = to_stream_rows(activity_id, records)
     if not rows:
         return 0
 
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM activity_stream WHERE activity_id = %s", (activity_id,))
-        columns = ", ".join(STREAM_COLUMNS)
-        with cur.copy(f"COPY activity_stream ({columns}) FROM STDIN") as copy:  # noqa: S608
-            for row in rows:
-                copy.write_row(row)
-
-        cur.execute(
-            "UPDATE activity SET has_streams = true, updated_at = now() WHERE id = %s",
-            (activity_id,),
-        )
+    conn.execute("DELETE FROM activity_stream WHERE activity_id = ?", (activity_id,))
+    columns = ", ".join(STREAM_COLUMNS)
+    placeholders = ", ".join(["?"] * len(STREAM_COLUMNS))
+    conn.executemany(
+        f"INSERT INTO activity_stream ({columns}) VALUES ({placeholders})",  # noqa: S608
+        rows,
+    )
+    conn.execute(
+        "UPDATE activity SET has_streams = 1, updated_at = datetime('now') WHERE id = ?",
+        (activity_id,),
+    )
     return len(rows)
 
 
 def store_zone_time(conn, activity_id: int, seconds: dict[int, int]) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM activity_zone_time WHERE activity_id = %s AND metric = 'hr'",
-            (activity_id,),
-        )
-        if not seconds:
-            return
-        cur.executemany(
-            """
-            INSERT INTO activity_zone_time (activity_id, metric, zone_index, seconds)
-            VALUES (%s, 'hr', %s, %s)
-            """,
-            [(activity_id, index, value) for index, value in sorted(seconds.items())],
-        )
+    conn.execute(
+        "DELETE FROM activity_zone_time WHERE activity_id = ? AND metric = 'hr'",
+        (activity_id,),
+    )
+    if not seconds:
+        return
+    conn.executemany(
+        """
+        INSERT INTO activity_zone_time (activity_id, metric, zone_index, seconds)
+        VALUES (?, 'hr', ?, ?)
+        """,
+        [(activity_id, index, value) for index, value in sorted(seconds.items())],
+    )
 
 
 def _athlete_reference(conn, athlete_id: int, day: dt.date) -> tuple[int | None, int | None, str]:
@@ -200,34 +194,31 @@ def _athlete_reference(conn, athlete_id: int, day: dt.date) -> tuple[int | None,
     La FC de repos est celle mesurée autour de la date de l'activité, pas une
     constante : elle bouge avec la forme et la saison.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT round(avg(resting_hr))::int AS rhr FROM daily_wellness
-             WHERE athlete_id = %s AND day BETWEEN %s AND %s AND resting_hr IS NOT NULL
-            """,
-            (athlete_id, day - dt.timedelta(days=30), day + dt.timedelta(days=30)),
-        )
-        row = cur.fetchone()
-        hr_rest = row["rhr"] if row else None
+    row = conn.execute(
+        """
+        SELECT cast(round(avg(resting_hr)) AS INTEGER) AS rhr FROM daily_wellness
+         WHERE athlete_id = ? AND day BETWEEN ? AND ? AND resting_hr IS NOT NULL
+        """,
+        (athlete_id, day - dt.timedelta(days=30), day + dt.timedelta(days=30)),
+    ).fetchone()
+    hr_rest = row["rhr"] if row else None
 
-        cur.execute(
-            """
-            SELECT hr_max, hr_rest FROM hr_zone_set
-             WHERE athlete_id = %s AND valid_from <= %s
-             ORDER BY valid_from DESC LIMIT 1
-            """,
-            (athlete_id, day),
-        )
-        zone_set = cur.fetchone()
+    zone_set = conn.execute(
+        """
+        SELECT hr_max, hr_rest FROM hr_zone_set
+         WHERE athlete_id = ? AND valid_from <= ?
+         ORDER BY valid_from DESC LIMIT 1
+        """,
+        (athlete_id, day),
+    ).fetchone()
 
-        cur.execute("SELECT sex FROM athlete WHERE id = %s", (athlete_id,))
-        athlete = cur.fetchone()
+    athlete = conn.execute("SELECT sex FROM athlete WHERE id = ?", (athlete_id,)).fetchone()
 
     hr_max = zone_set["hr_max"] if zone_set else None
     if hr_rest is None and zone_set:
         hr_rest = zone_set["hr_rest"]
-    return hr_rest, hr_max, (athlete or {}).get("sex") or "M"
+    sex = athlete["sex"] if athlete and athlete["sex"] else "M"
+    return hr_rest, hr_max, sex
 
 
 def process_file(conn, file_row: dict[str, Any]) -> dict[str, Any]:
@@ -256,9 +247,9 @@ def process_file(conn, file_row: dict[str, Any]) -> dict[str, Any]:
 
     result["points"] = ingest_streams(conn, activity_id, parsed.records)
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT athlete_id, local_date FROM activity WHERE id = %s", (activity_id,))
-        activity = cur.fetchone()
+    activity = conn.execute(
+        "SELECT athlete_id, local_date FROM activity WHERE id = ?", (activity_id,)
+    ).fetchone()
     if activity is None:
         return result
 
@@ -272,19 +263,18 @@ def process_file(conn, file_row: dict[str, Any]) -> dict[str, Any]:
     if hr_rest is not None and hr_max is not None:
         trimp = compute_trimp(parsed.records, hr_rest, hr_max, sex)
         if trimp is not None:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE activity SET trimp = %s, updated_at = now() WHERE id = %s",
-                    (trimp, activity_id),
-                )
+            conn.execute(
+                "UPDATE activity SET trimp = ?, updated_at = datetime('now') WHERE id = ?",
+                (trimp, activity_id),
+            )
             result["trimp"] = trimp
 
     if not parsed.laps:
         return result
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) AS n FROM activity_lap WHERE activity_id = %s", (activity_id,))
-        existing = cur.fetchone()["n"]
+    existing = conn.execute(
+        "SELECT count(*) AS n FROM activity_lap WHERE activity_id = ?", (activity_id,)
+    ).fetchone()["n"]
     if existing == 0:
         repo.replace_laps(conn, activity_id, parsed.laps)
 
@@ -293,27 +283,24 @@ def process_file(conn, file_row: dict[str, Any]) -> dict[str, Any]:
 
 def backfill(limit: int = 200) -> dict[str, int]:
     """Traite les .fit archivés pas encore parsés."""
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, source, external_id, path FROM raw.activity_file
-             WHERE parsed_at IS NULL AND format = 'fit'
-             ORDER BY downloaded_at DESC LIMIT %s
-            """,
-            (limit,),
-        )
-        pending = cur.fetchall()
+    pending = fetch_all(
+        """
+        SELECT id, source, external_id, path FROM raw_activity_file
+         WHERE parsed_at IS NULL AND format = 'fit'
+         ORDER BY downloaded_at DESC LIMIT ?
+        """,
+        (limit,),
+    )
 
     totals = {"files": 0, "points": 0, "failed": 0}
     for file_row in pending:
         try:
             with connection() as conn:
                 outcome = process_file(conn, file_row)
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE raw.activity_file SET parsed_at = now() WHERE id = %s",
-                        (file_row["id"],),
-                    )
+                conn.execute(
+                    "UPDATE raw_activity_file SET parsed_at = datetime('now') WHERE id = ?",
+                    (file_row["id"],),
+                )
             totals["files"] += 1
             totals["points"] += outcome["points"]
         except Exception as exc:  # noqa: BLE001 — un fichier abîmé n'arrête pas le lot

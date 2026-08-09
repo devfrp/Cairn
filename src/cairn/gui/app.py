@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from cairn.gui import prefs, queries, theme
 from cairn.gui.pages.activities import ActivitiesPage
+from cairn.gui.pages.analysis import AnalysisPage
 from cairn.gui.pages.dashboard import DashboardPage
 from cairn.gui.pages.settings_page import SettingsPage
 from cairn.gui.pages.sync import SyncPage
@@ -29,9 +30,6 @@ from cairn.gui.workers import Worker
 # Vérification périodique de la base : assez rare pour ne rien peser, assez
 # fréquente pour que la pastille d'état reste crédible.
 HEALTH_INTERVAL_MS = 30_000
-
-# L'interface préfère un diagnostic rapide à une tentative obstinée.
-GUI_DB_TIMEOUT_S = "3"
 
 
 def icon_path() -> Path | None:
@@ -63,10 +61,12 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.dashboard = DashboardPage()
         self.activities = ActivitiesPage()
+        self.analysis = AnalysisPage()
         self.sync = SyncPage()
         self.settings = SettingsPage()
 
-        for page in (self.dashboard, self.activities, self.sync, self.settings):
+        for page in (self.dashboard, self.activities, self.analysis,
+                     self.sync, self.settings):
             self.pages.addWidget(page)
 
         container = QWidget()
@@ -125,8 +125,9 @@ class MainWindow(QMainWindow):
         entries = (
             ("Tableau de bord", 0),
             ("Activités", 1),
-            ("Synchronisation", 2),
-            ("Réglages", 3),
+            ("Analyse", 2),
+            ("Synchronisation", 3),
+            ("Réglages", 4),
         )
         for label, index in entries:
             button = QPushButton(label)
@@ -141,8 +142,8 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         hint = QLabel(
-            "Les graphiques détaillés restent dans Grafana ; cette fenêtre "
-            "sert à piloter et à voir l'essentiel."
+            "Vos données restent dans un fichier que vous contrôlez, sur "
+            "cette machine."
         )
         hint.setObjectName("SidebarSubtitle")
         hint.setWordWrap(True)
@@ -184,7 +185,7 @@ class MainWindow(QMainWindow):
             self.status_pill.setText("schéma absent")
             self.status_pill.set_tone("warn")
         else:
-            self.status_pill.setText("base injoignable")
+            self.status_pill.setText("base illisible")
             self.status_pill.set_tone("danger")
 
         current = self.pages.currentWidget()
@@ -221,12 +222,9 @@ def selftest() -> int:
 
 def main() -> int:
     """Point d'entrée de l'application graphique."""
-    import os
 
     if "--selftest" in sys.argv:
         return selftest()
-
-    os.environ.setdefault("CAIRN_DB_TIMEOUT", GUI_DB_TIMEOUT_S)
 
     app = QApplication(sys.argv)
     app.setApplicationName("Cairn")

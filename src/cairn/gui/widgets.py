@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -60,8 +60,8 @@ class StatCard(Card):
 class Sparkline(QWidget):
     """Courbe compacte sans axes, pour lire une tendance d'un coup d'œil.
 
-    Volontairement dépouillée : les graphiques détaillés sont l'affaire de
-    Grafana, pas de cette fenêtre.
+    Volontairement dépouillée : les répartitions détaillées sont l'affaire de
+    la page Analyse.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -226,3 +226,138 @@ def format_relative_day(day: dt.date | dt.datetime | None) -> str:
     if 2 <= delta < 7:
         return f"il y a {delta} jours"
     return day.strftime("%d/%m/%Y")
+
+
+class BarBreakdown(QWidget):
+    """Barres horizontales empilables : répartition d'un total.
+
+    Sert aux zones de fréquence cardiaque et au volume par discipline, où ce
+    qui compte est la proportion, pas la valeur absolue.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[tuple[str, float, str, str]] = []
+        self.setMinimumHeight(40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def set_rows(self, rows: list[tuple[str, float, str, str]]) -> None:
+        """rows : (libellé, valeur, texte affiché à droite, couleur)."""
+        self._rows = list(rows)
+        self.setMinimumHeight(max(40, len(self._rows) * 30 + 6))
+        self.updateGeometry()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
+        if not self._rows:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        largest = max((value for _, value, _, _ in self._rows), default=0) or 1
+
+        font = painter.font()
+        font.setPointSizeF(max(8.0, font.pointSizeF() - 1))
+        painter.setFont(font)
+
+        # La colonne de droite s'ajuste au texte le plus long : une largeur
+        # fixe tronquait « 12 h 18 · 294,7 km ».
+        metrics = QFontMetrics(font)
+        label_width = 116
+        value_width = max(
+            (metrics.horizontalAdvance(caption) for _, _, caption, _ in self._rows),
+            default=0,
+        ) + 14
+        track_left = label_width + 8
+        track_width = max(20, self.width() - track_left - value_width)
+
+        for index, (label, value, caption, colour) in enumerate(self._rows):
+            top = index * 30
+            row = QRectF(0, top, self.width(), 26)
+
+            painter.setPen(QColor(theme.MUTED))
+            painter.drawText(
+                QRectF(0, top, label_width, 26),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+
+            # Rail de fond : rend lisibles les valeurs très faibles.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme.SURFACE_ALT))
+            painter.drawRoundedRect(QRectF(track_left, top + 8, track_width, 10), 5, 5)
+
+            filled = track_width * (value / largest)
+            if filled > 0:
+                painter.setBrush(QColor(colour))
+                painter.drawRoundedRect(
+                    QRectF(track_left, top + 8, max(4.0, filled), 10), 5, 5
+                )
+
+            painter.setPen(QColor(theme.TEXT))
+            painter.drawText(
+                QRectF(row.width() - value_width, top, value_width - 4, 26),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                caption,
+            )
+
+        painter.end()
+
+
+class ColumnChart(QWidget):
+    """Colonnes verticales, pour une charge semaine par semaine."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._values: list[tuple[str, float]] = []
+        self._colour = theme.ACCENT
+        self.setMinimumHeight(120)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def set_values(self, values: list[tuple[str, float]], colour: str | None = None) -> None:
+        self._values = list(values)
+        if colour:
+            self._colour = colour
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
+        if not self._values:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        font = painter.font()
+        font.setPointSizeF(max(7.5, font.pointSizeF() - 2))
+        painter.setFont(font)
+
+        label_height = 18
+        top_margin = 6
+        plot_height = self.height() - label_height - top_margin
+        largest = max((v for _, v in self._values), default=0) or 1
+        slot = self.width() / len(self._values)
+        bar_width = min(38.0, slot * 0.62)
+
+        for index, (label, value) in enumerate(self._values):
+            centre = slot * (index + 0.5)
+            height = plot_height * (value / largest)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self._colour))
+            painter.drawRoundedRect(
+                QRectF(centre - bar_width / 2,
+                       top_margin + plot_height - height,
+                       bar_width,
+                       max(2.0, height)),
+                4, 4,
+            )
+
+            painter.setPen(QColor(theme.MUTED))
+            painter.drawText(
+                QRectF(centre - slot / 2, self.height() - label_height, slot, label_height),
+                Qt.AlignmentFlag.AlignCenter,
+                label,
+            )
+
+        painter.end()

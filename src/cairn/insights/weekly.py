@@ -274,19 +274,19 @@ def _store(result: dict, facts: WeeklyFacts) -> None:
         "load": facts.load,
     }
     try:
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute(
+        with connection() as conn:
+            conn.execute(
                 """
                 INSERT INTO llm_summary (athlete_id, period_kind, period_start,
                                          period_end, model, input_facts,
                                          summary_md, latency_ms)
-                SELECT id, 'weekly', %s, %s, %s, %s, %s, %s FROM athlete ORDER BY id LIMIT 1
+                SELECT id, 'weekly', ?, ?, ?, ?, ?, ? FROM athlete ORDER BY id LIMIT 1
                 ON CONFLICT (athlete_id, period_kind, period_start) DO UPDATE
-                   SET summary_md = EXCLUDED.summary_md,
-                       model = EXCLUDED.model,
-                       input_facts = EXCLUDED.input_facts,
-                       latency_ms = EXCLUDED.latency_ms,
-                       generated_at = now()
+                   SET summary_md   = excluded.summary_md,
+                       model        = excluded.model,
+                       input_facts  = excluded.input_facts,
+                       latency_ms   = excluded.latency_ms,
+                       generated_at = datetime('now')
                 """,
                 (
                     result["start"],

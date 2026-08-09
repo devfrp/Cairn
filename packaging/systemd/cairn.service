@@ -5,12 +5,13 @@
 #   sudo systemctl enable --now cairn
 #
 # La configuration est lue dans /etc/cairn/cairn.env, qui contient la clé de
-# chiffrement : ce fichier doit rester en 0600.
+# chiffrement : ce fichier doit rester en 0600. CAIRN_DB_PATH doit désigner
+# le même fichier que celui utilisé par l'application de bureau.
 
 [Unit]
 Description=Cairn — synchronisation Garmin et Strava
 Documentation=https://github.com/devfrp/Cairn
-After=network-online.target postgresql.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]

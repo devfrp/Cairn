@@ -230,10 +230,9 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
           body: |
-            Application de bureau Cairn, sans installation ni interpréteur
-            Python à prévoir. Elle se connecte à votre propre base
-            PostgreSQL, installée séparément sur la machine qui héberge vos
-            données.
+            Application de bureau Cairn, entièrement autonome : elle
+            transporte sa base de données, son moteur de langage et son
+            modèle. Rien d'autre à installer.
 
             | Système | Fichier |
             |---|---|

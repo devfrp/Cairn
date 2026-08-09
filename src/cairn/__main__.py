@@ -11,24 +11,20 @@ import sys
 
 
 def main() -> None:
-    from psycopg import OperationalError
-    from psycopg_pool import PoolTimeout
+    import sqlite3
 
     from cairn.cli import app
 
     try:
         app()
-    except (PoolTimeout, OperationalError) as exc:
+    except sqlite3.Error as exc:
         from cairn.config import get_settings
 
-        dsn = get_settings().db_dsn
-        # Le DSN contient le mot de passe : on n'affiche que l'hôte.
-        location = dsn.rsplit("@", 1)[-1] if "@" in dsn else dsn
         print(
-            f"Base de données injoignable sur {location}.\n"
+            f"Fichier de données inutilisable : {get_settings().db_path}\n"
             f"  {type(exc).__name__}: {exc}\n\n"
-            "Vérifier que PostgreSQL est démarré et que "
-            "CAIRN_DB_DSN pointe au bon endroit.",
+            "Vérifier que le chemin existe et qu'il est accessible en écriture "
+            "(CAIRN_DB_PATH).",
             file=sys.stderr,
         )
         raise SystemExit(2) from None

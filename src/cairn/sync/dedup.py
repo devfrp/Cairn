@@ -76,17 +76,15 @@ def find_existing_activity(
     sport_family: str,
 ) -> int | None:
     """Cherche en base une activité déjà connue correspondant à celle-ci."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, start_time, sport_family
-              FROM activity
-             WHERE athlete_id = %s
-               AND start_time BETWEEN %s AND %s
-            """,
-            (athlete_id, start_time - MATCH_WINDOW, start_time + MATCH_WINDOW),
-        )
-        candidates = cur.fetchall()
+    candidates = conn.execute(
+        """
+        SELECT id, start_time, sport_family
+          FROM activity
+         WHERE athlete_id = ?
+           AND start_time BETWEEN ? AND ?
+        """,
+        (athlete_id, start_time - MATCH_WINDOW, start_time + MATCH_WINDOW),
+    ).fetchall()
     match = pick_best_match(candidates, start_time, sport_family)
     return match["id"] if match else None
 
@@ -95,15 +93,13 @@ def resolve_sport(conn, source: str, source_value: str | None) -> tuple[str, str
     """Traduit un libellé de sport via `sport_map`, avec repli sur 'other'."""
     if not source_value:
         return "other", "other"
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT canonical_sport, canonical_family
-              FROM sport_map WHERE source = %s AND source_value = %s
-            """,
-            (source, source_value),
-        )
-        row = cur.fetchone()
+    row = conn.execute(
+        """
+        SELECT canonical_sport, canonical_family
+          FROM sport_map WHERE source = ? AND source_value = ?
+        """,
+        (source, source_value),
+    ).fetchone()
     if row is None:
         log.warning(
             "sport inconnu, classé en 'other' — ajouter une ligne dans sport_map",

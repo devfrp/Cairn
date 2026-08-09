@@ -61,13 +61,13 @@ class SettingsPage(QWidget):
 
     def _build_database(self) -> Card:
         card = Card()
-        title = QLabel("Base de données")
+        title = QLabel("Données")
         title.setObjectName("SectionTitle")
         card.layout().addWidget(title)
 
         self.dsn = QLineEdit()
-        self.dsn.setPlaceholderText("postgresql://cairn:motdepasse@192.168.1.20:5432/cairn")
-        card.layout().addWidget(field_row("Chaîne de connexion", self.dsn))
+        self.dsn.setPlaceholderText("chemin du fichier cairn.db")
+        card.layout().addWidget(field_row("Fichier de données", self.dsn))
 
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
@@ -354,7 +354,7 @@ class SettingsPage(QWidget):
 
     def load_values(self) -> None:
         values = prefs.load()
-        self.dsn.setText(values.get("db_dsn", ""))
+        self.dsn.setText(values.get("db_path", ""))
         self.secret.setText(values.get("secret_key", ""))
         self.garmin_email.setText(values.get("garmin_email", ""))
         self.strava_id.setText(values.get("strava_client_id", ""))
@@ -368,7 +368,7 @@ class SettingsPage(QWidget):
     def save_values(self) -> None:
         prefs.save(
             {
-                "db_dsn": self.dsn.text().strip(),
+                "db_path": self.dsn.text().strip(),
                 "secret_key": self.secret.text().strip(),
                 "garmin_email": self.garmin_email.text().strip(),
                 "strava_client_id": self.strava_id.text().strip(),
@@ -383,10 +383,9 @@ class SettingsPage(QWidget):
 
     def refresh(self, health: queries.Health) -> None:
         if health.usable:
-            self.db_state.setText("connecté")
+            self.db_state.setText("prêt")
             self.db_state.set_tone("ok")
-            extra = f" · TimescaleDB {health.timescale}" if health.timescale else ""
-            self.db_detail.setText(f"Schéma installé{extra}.")
+            self.db_detail.setText(f"Schéma installé · {health.engine}.")
             linked = queries.credentials_present()
         elif health.reachable:
             self.db_state.setText("schéma absent")
@@ -394,7 +393,7 @@ class SettingsPage(QWidget):
             self.db_detail.setText(health.detail)
             linked = {"garmin": False, "strava": False}
         else:
-            self.db_state.setText("injoignable")
+            self.db_state.setText("illisible")
             self.db_state.set_tone("danger")
             self.db_detail.setText(health.detail)
             linked = {"garmin": False, "strava": False}
@@ -453,8 +452,8 @@ class SettingsPage(QWidget):
         if not health.usable:
             QMessageBox.warning(
                 self, "Base indisponible",
-                "Le jeton Garmin est conservé en base : configurez d'abord "
-                "la connexion et installez le schéma.",
+                "Le jeton Garmin est conservé dans le fichier de données : "
+                "installez d'abord le schéma.",
             )
             return
 

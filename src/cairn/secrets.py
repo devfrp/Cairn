@@ -2,7 +2,7 @@
 
 Les tokens vivent en base pour survivre à une recréation du conteneur, mais
 chiffrés : la clé est dans l'environnement de la LXC, pas dans la base. Un
-dump Postgres qui fuite ne donne donc pas accès aux comptes.
+fichier de données copié ne donne donc pas accès aux comptes.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from cairn.config import get_settings
-from cairn.db import connection
+from cairn.db import connection, fetch_one
 
 
 class SecretsUnavailable(RuntimeError):
@@ -36,24 +36,22 @@ def _fernet() -> Fernet:
 
 def save_credential(source: str, payload: dict[str, Any], expires_at=None) -> None:
     blob = _fernet().encrypt(json.dumps(payload, default=str).encode("utf-8"))
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
+    with connection() as conn:
+        conn.execute(
             """
             INSERT INTO credential (source, payload_enc, expires_at, updated_at)
-            VALUES (%s, %s, %s, now())
+            VALUES (?, ?, ?, datetime('now'))
             ON CONFLICT (source) DO UPDATE
-               SET payload_enc = EXCLUDED.payload_enc,
-                   expires_at  = EXCLUDED.expires_at,
-                   updated_at  = now()
+               SET payload_enc = excluded.payload_enc,
+                   expires_at  = excluded.expires_at,
+                   updated_at  = datetime('now')
             """,
             (source, blob, expires_at),
         )
 
 
 def load_credential(source: str) -> dict[str, Any] | None:
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT payload_enc FROM credential WHERE source = %s", (source,))
-        row = cur.fetchone()
+    row = fetch_one("SELECT payload_enc FROM credential WHERE source = ?", (source,))
     if row is None:
         return None
     try:
@@ -67,5 +65,5 @@ def load_credential(source: str) -> dict[str, Any] | None:
 
 
 def delete_credential(source: str) -> None:
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM credential WHERE source = %s", (source,))
+    with connection() as conn:
+        conn.execute("DELETE FROM credential WHERE source = ?", (source,))

@@ -130,12 +130,11 @@ def _needs_detail(conn, activity_id: int | None, start_time: dt.datetime, mode: 
         return True
     if mode == "backfill":
         # Déjà couverte par Garmin ? Le détail n'apporterait rien de neuf.
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM activity_source WHERE activity_id = %s AND source = 'garmin'",
-                (activity_id,),
-            )
-            return cur.fetchone() is None
+        found = conn.execute(
+            "SELECT 1 FROM activity_source WHERE activity_id = ? AND source = 'garmin'",
+            (activity_id,),
+        ).fetchone()
+        return found is None
     return False
 
 
@@ -144,61 +143,61 @@ def _ingest_segment_efforts(conn, activity_id: int, detail: dict[str, Any]) -> i
     if not efforts:
         return 0
 
-    with conn.cursor() as cur:
-        for effort in efforts:
-            if not isinstance(effort, dict):
-                continue
-            segment = effort.get("segment") or {}
-            segment_id = segment.get("id")
-            if not segment_id:
-                continue
+    for effort in efforts:
+        if not isinstance(effort, dict):
+            continue
+        segment = effort.get("segment") or {}
+        segment_id = segment.get("id")
+        if not segment_id:
+            continue
 
-            cur.execute(
-                """
-                INSERT INTO segment (strava_segment_id, name, activity_family, distance_m,
-                                     avg_grade_pct, max_grade_pct, elevation_high_m,
-                                     elevation_low_m, climb_category, starred, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                ON CONFLICT (strava_segment_id) DO UPDATE
-                   SET name = EXCLUDED.name, starred = EXCLUDED.starred, updated_at = now()
-                """,
-                (
-                    segment_id,
-                    segment.get("name") or str(segment_id),
-                    segment.get("activity_type"),
-                    to_float(segment.get("distance")),
-                    to_float(segment.get("average_grade")),
-                    to_float(segment.get("maximum_grade")),
-                    to_float(segment.get("elevation_high")),
-                    to_float(segment.get("elevation_low")),
-                    to_int(segment.get("climb_category")),
-                    bool(segment.get("starred") or False),
-                ),
-            )
-            cur.execute(
-                """
-                INSERT INTO segment_effort (strava_effort_id, segment_id, activity_id,
-                                            start_time, elapsed_s, moving_s, avg_hr, max_hr,
-                                            avg_power_w, avg_cadence, pr_rank, kom_rank)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (strava_effort_id) DO UPDATE
-                   SET pr_rank = EXCLUDED.pr_rank, kom_rank = EXCLUDED.kom_rank
-                """,
-                (
-                    effort.get("id"),
-                    segment_id,
-                    activity_id,
-                    parse_iso(effort.get("start_date")),
-                    to_int(effort.get("elapsed_time")),
-                    to_int(effort.get("moving_time")),
-                    to_int(effort.get("average_heartrate")),
-                    to_int(effort.get("max_heartrate")),
-                    to_int(effort.get("average_watts")),
-                    to_float(effort.get("average_cadence")),
-                    to_int(effort.get("pr_rank")),
-                    to_int(effort.get("kom_rank")),
-                ),
-            )
+        conn.execute(
+            """
+            INSERT INTO segment (strava_segment_id, name, activity_family, distance_m,
+                                 avg_grade_pct, max_grade_pct, elevation_high_m,
+                                 elevation_low_m, climb_category, starred, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT (strava_segment_id) DO UPDATE
+               SET name = excluded.name, starred = excluded.starred,
+                   updated_at = datetime('now')
+            """,
+            (
+                segment_id,
+                segment.get("name") or str(segment_id),
+                segment.get("activity_type"),
+                to_float(segment.get("distance")),
+                to_float(segment.get("average_grade")),
+                to_float(segment.get("maximum_grade")),
+                to_float(segment.get("elevation_high")),
+                to_float(segment.get("elevation_low")),
+                to_int(segment.get("climb_category")),
+                int(bool(segment.get("starred"))),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO segment_effort (strava_effort_id, segment_id, activity_id,
+                                        start_time, elapsed_s, moving_s, avg_hr, max_hr,
+                                        avg_power_w, avg_cadence, pr_rank, kom_rank)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (strava_effort_id) DO UPDATE
+               SET pr_rank = excluded.pr_rank, kom_rank = excluded.kom_rank
+            """,
+            (
+                effort.get("id"),
+                segment_id,
+                activity_id,
+                parse_iso(effort.get("start_date")),
+                to_int(effort.get("elapsed_time")),
+                to_int(effort.get("moving_time")),
+                to_int(effort.get("average_heartrate")),
+                to_int(effort.get("max_heartrate")),
+                to_int(effort.get("average_watts")),
+                to_float(effort.get("average_cadence")),
+                to_int(effort.get("pr_rank")),
+                to_int(effort.get("kom_rank")),
+            ),
+        )
     return len(efforts)
 
 

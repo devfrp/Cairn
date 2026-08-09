@@ -18,12 +18,9 @@ class Settings(BaseSettings):
     )
 
     # --- base ---
-    db_dsn: str = "postgresql://cairn:cairn@localhost:5432/cairn"
-    # Délai avant d'abandonner l'obtention d'une connexion. L'interface
-    # graphique le raccourcit : mieux vaut afficher « injoignable » vite
-    # qu'attendre en silence.
-    db_timeout: float = Field(default=10.0, ge=1.0, le=60.0)
-    file_root: Path = Path("/data/activities")
+    # Un fichier, pas un serveur : l'application transporte ses données.
+    db_path: Path = Path("cairn.db")
+    file_root: Path = Path("activities")
     secret_key: str = ""
 
     # --- Garmin ---
@@ -55,6 +52,10 @@ class Settings(BaseSettings):
     @property
     def raw_file_root(self) -> Path:
         return self.file_root / "raw"
+
+    @property
+    def data_dir(self) -> Path:
+        return Path(self.db_path).expanduser().parent
 
 
 @lru_cache

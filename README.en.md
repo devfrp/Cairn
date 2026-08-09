@@ -3,7 +3,7 @@
 *[Version française](README.md)*
 
 Self-hosted health and training tracker. Cairn pulls your Garmin Connect and
-Strava data into a PostgreSQL database you fully control, and cross-references
+Strava data into a single file you fully control, and cross-references
 recovery against training load — something neither service does, since they
 don't talk to each other.
 
@@ -18,7 +18,8 @@ No data leaves your server beyond the API calls needed to synchronise.
   sensors from Garmin, gear and segments from Strava.
 - **Recovery × load**: a night's sleep, HRV and resting heart rate placed
   alongside the same day's rides.
-- **Grafana dashboards**, version-controlled in the repo.
+- **Built-in analysis**: time per heart rate zone, volume per discipline,
+  load week after week.
 - **Weekly summary** written by an Ollama model running on your own hardware,
   optionally delivered to Discord.
 
@@ -26,11 +27,9 @@ Project site: <https://devfrp.github.io/Cairn/en/>
 
 ## Install the app
 
-Cairn has two parts: a **PostgreSQL database** holding your data, and a
-**desktop application** that connects to it.
-The application ships as a self-contained package — AppImage on Linux, a zip
-on Windows, `.dmg` on macOS — with no Python interpreter and no language
-engine to install:
+Cairn is a **self-contained desktop application**: it carries its database,
+its language engine and its model. Shipped as an AppImage on Linux, a zip on
+Windows and a `.dmg` on macOS, with nothing else to install:
 
 ```bash
 curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
@@ -50,62 +49,34 @@ it is also bundled inside the AppImage and the dmg.
 
 ## Requirements
 
-- A machine running PostgreSQL 16 with the TimescaleDB extension (a Debian
-  LXC container works well).
 - A Garmin Connect account.
 - A Strava application — create one at <https://www.strava.com/settings/api>.
 
-## Set up the database
+## First launch
 
-On Debian or Ubuntu, using TimescaleDB's official repositories:
+Nothing to prepare. On opening, the **Settings** page offers a location for
+the data file, generates the key that encrypts your tokens, installs the
+schema and links your accounts.
 
-```bash
-sudo apt install -y postgresql-16 postgresql-16-timescaledb
-sudo timescaledb-tune --quiet --yes && sudo systemctl restart postgresql
-```
-
-Create the role and the database:
-
-```bash
-sudo -u postgres createuser --pwprompt cairn
-sudo -u postgres createdb --owner=cairn cairn
-```
-
-The desktop application takes it from there: its **Settings** page holds the
-connection string, generates the encryption key and installs the schema at
-the press of a button.
+The `cairn.db` file holds everything. Backing it up backs up Cairn; copying it
+to another machine moves Cairn there.
 
 ## Automatic syncing
 
-The application syncs on demand. For a hands-off nightly pass, install the
-service on the machine hosting the database:
+The application syncs on demand. For a hands-off nightly pass on a machine
+that stays on:
 
 ```bash
 sudo install -d -o cairn -g cairn /opt/cairn /var/lib/cairn
 sudo -u cairn python3 -m venv /opt/cairn/venv
 sudo -u cairn /opt/cairn/venv/bin/pip install 'cairn @ git+https://github.com/devfrp/Cairn'
-```
-
-Create `/etc/cairn/cairn.env` from [.env.example](.env.example) — it holds
-the encryption key, so keep it at `0600`:
-
-```bash
 sudo install -D -m 600 .env.example /etc/cairn/cairn.env
-sudo /opt/cairn/venv/bin/cairn keygen
-```
-
-Put the key in the file, then enable the service:
-
-```bash
 sudo cp packaging/systemd/cairn.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now cairn
 ```
 
-## Detailed charts
-
-The application shows the essentials. For deeper charts, Grafana plugs
-straight into the database: [grafana/](grafana/) holds the data source and
-the dashboards, ready to copy into `/etc/grafana/provisioning/`.
+The service shares the application's data file: point `CAIRN_DB_PATH` at the
+same path.
 
 ## Authentication
 
@@ -202,13 +173,9 @@ src/cairn/
   sources/         Garmin (garth) and Strava (OAuth2 + quota) clients
   sync/            mappers, deduplication, upserts, orchestration
 packaging/         PyInstaller recipes, icons, systemd unit
-grafana/           provisioned data source and dashboards
 ```
 
-The database has three layers: `raw` (untouched payloads, the source of
-truth), `public` (normalised model) and `marts` (aggregates for Grafana). Raw
-data is never discarded: if a mapper needs fixing, the transformation replays
-without hitting the APIs again.
-
-Time series (activity streams, intraday measurements) are compressed
-TimescaleDB hypertables.
+The database is a SQLite file in three layers, marked by table prefix:
+`raw_` (untouched payloads, the source of truth), unprefixed (normalised
+model) and `marts_` (aggregates). Raw data is never discarded: if a mapper
+needs fixing, the transformation replays without hitting the APIs again.

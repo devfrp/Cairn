@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cairn — vos données Garmin et Strava, réunies chez vous</title>
-<meta name="description" content="Application auto-hébergée qui agrège Garmin Connect et Strava dans une base PostgreSQL que vous contrôlez, et croise récupération et charge d'entraînement.">
+<meta name="description" content="Application auto-hébergée qui agrège Garmin Connect et Strava dans un fichier que vous contrôlez, et croise récupération et charge d'entraînement.">
 <link rel="icon" href="assets/cairn.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/style.css">
 <link rel="alternate" hreflang="en" href="en/">
@@ -106,7 +106,7 @@
       <div class="card">
         <h3>Streams seconde par seconde</h3>
         <p>
-          Les <code>.fit</code> sont décodés en séries 1 Hz dans TimescaleDB :
+          Les <code>.fit</code> sont décodés en séries seconde par seconde :
           zones de FC exactes, dérive cardiaque, analyse fine d'une sortie.
         </p>
       </div>
@@ -124,7 +124,7 @@
     <ul class="status">
       <li><span class="tag tag-ok">Fait</span> <span>Schéma de base, synchronisation Garmin et Strava, déduplication, curseurs de reprise</span></li>
       <li><span class="tag tag-ok">Fait</span> <span>Décodage des fichiers <code>.fit</code>, zones de fréquence cardiaque, charge d'entraînement TRIMP</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Dashboards Grafana provisionnés, service de synchronisation systemd</span></li>
+      <li><span class="tag tag-ok">Fait</span> <span>Analyse intégrée : zones de FC, volume par discipline, charge hebdomadaire</span></li>
       <li><span class="tag tag-wip">En cours</span> <span>Charge chronique et aiguë (CTL / ATL / TSB), baselines HRV, détection de surcharge</span></li>
       <li><span class="tag tag-ok">Fait</span> <span>Résumé hebdomadaire rédigé par un modèle local (Ollama), envoi Discord</span></li>
     </ul>
@@ -133,21 +133,18 @@
 
 <section>
   <div class="wrap">
-    <h2>Préparer la base</h2>
+    <h2>Premier démarrage</h2>
     <p>
-      Cairn range vos données dans une base PostgreSQL que vous hébergez —
-      un conteneur LXC ou une petite machine suffisent. L'extension
-      TimescaleDB prend en charge les séries seconde par seconde.
+      Il n'y a rien à préparer : l'application transporte sa base, son moteur
+      de langage et son modèle. À l'ouverture, sa page Réglages choisit
+      l'emplacement du fichier de données, génère la clé de chiffrement,
+      installe le schéma, puis relie Garmin et Strava. Garmin n'ayant pas
+      d'API publique pour un usage individuel, Cairn ouvre une session et
+      conserve le jeton chiffré — votre mot de passe n'est jamais stocké.
     </p>
-<pre><code>sudo apt install -y postgresql-16 postgresql-16-timescaledb
-sudo -u postgres createuser --pwprompt cairn
-sudo -u postgres createdb --owner=cairn cairn</code></pre>
     <p>
-      Le reste se fait dans l'application : sa page Réglages renseigne la
-      connexion, génère la clé de chiffrement, installe le schéma, puis relie
-      Garmin et Strava. Garmin n'ayant pas d'API publique pour un usage
-      individuel, Cairn ouvre une session et conserve le jeton chiffré en
-      base — votre mot de passe n'est jamais stocké.
+      Un seul fichier, <code>cairn.db</code>, contient toutes vos données.
+      Le sauvegarder, c'est sauvegarder Cairn.
     </p>
   </div>
 </section>

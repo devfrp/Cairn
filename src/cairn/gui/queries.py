@@ -9,10 +9,9 @@ structure exploitable plutôt que de laisser filer une exception, et
 from __future__ import annotations
 
 import datetime as dt
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
-
-import psycopg
 
 from cairn.db import fetch_all, fetch_one
 
@@ -22,7 +21,7 @@ class Health:
     reachable: bool = False
     migrated: bool = False
     detail: str = ""
-    timescale: str | None = None
+    engine: str | None = None
 
     @property
     def usable(self) -> bool:
@@ -43,32 +42,25 @@ def probe() -> Health:
     try:
         found = fetch_one(
             """
-            SELECT count(*) AS n FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_name IN ('activity', 'sleep_session')
+            SELECT count(*) AS n FROM sqlite_master
+             WHERE type = 'table' AND name IN ('activity', 'sleep_session')
             """
         )
         health.migrated = bool(found and found["n"] == 2)
         if not health.migrated:
-            health.detail = "Base joignable, mais le schéma n'est pas installé."
+            health.detail = "Fichier de données créé, mais le schéma n'est pas installé."
     except Exception as exc:  # noqa: BLE001
         health.detail = f"{type(exc).__name__} : {exc}"
         return health
 
-    try:
-        ts = fetch_one(
-            "SELECT extversion AS v FROM pg_extension WHERE extname = 'timescaledb'"
-        )
-        health.timescale = ts["v"] if ts else None
-    except Exception:  # noqa: BLE001 — information secondaire
-        health.timescale = None
-
+    health.engine = f"SQLite {sqlite3.sqlite_version}"
     return health
 
 
 def _safe(query: str, params: tuple | None = None) -> list[dict[str, Any]]:
     try:
         return fetch_all(query, params)
-    except (psycopg.Error, OSError):
+    except (sqlite3.Error, OSError):
         return []
 
 
@@ -90,18 +82,22 @@ def recovery(days: int = 30) -> Recovery:
     """Dernier état de récupération connu, et sa tendance."""
     rows = _safe(
         """
-        SELECT d::date AS day, h.avg_hrv_ms, h.status, w.resting_hr,
+        WITH RECURSIVE calendar(day) AS (
+            SELECT date('now', 'localtime', ? || ' days')
+            UNION ALL
+            SELECT date(day, '+1 day') FROM calendar
+             WHERE day < date('now', 'localtime')
+        )
+        SELECT calendar.day AS day, h.avg_hrv_ms, h.status, w.resting_hr,
                s.score AS sleep_score, s.duration_s, w.body_battery_high,
                w.training_readiness
-          FROM generate_series(
-                   current_date - %s::int, current_date, interval '1 day'
-               ) AS d
-          LEFT JOIN hrv_night      h ON h.day        = d::date
-          LEFT JOIN daily_wellness w ON w.day        = d::date
-          LEFT JOIN sleep_session  s ON s.sleep_date = d::date
-         ORDER BY d
+          FROM calendar
+          LEFT JOIN hrv_night      h ON h.day        = calendar.day
+          LEFT JOIN daily_wellness w ON w.day        = calendar.day
+          LEFT JOIN sleep_session  s ON s.sleep_date = calendar.day
+         ORDER BY calendar.day
         """,
-        (days,),
+        (-days,),
     )
     if not rows:
         return Recovery()
@@ -151,15 +147,19 @@ class Load:
 def load(days: int = 30) -> Load:
     series = _safe(
         """
-        SELECT d::date AS day,
+        WITH RECURSIVE calendar(day) AS (
+            SELECT date('now', 'localtime', ? || ' days')
+            UNION ALL
+            SELECT date(day, '+1 day') FROM calendar
+             WHERE day < date('now', 'localtime')
+        )
+        SELECT calendar.day AS day,
                coalesce(sum(coalesce(a.training_load, a.trimp)), 0) AS load
-          FROM generate_series(
-                   current_date - %s::int, current_date, interval '1 day'
-               ) AS d
-          LEFT JOIN activity a ON a.local_date = d::date
-         GROUP BY d ORDER BY d
+          FROM calendar
+          LEFT JOIN activity a ON a.local_date = calendar.day
+         GROUP BY calendar.day ORDER BY calendar.day
         """,
-        (days,),
+        (-days,),
     )
     totals = _safe(
         """
@@ -169,20 +169,21 @@ def load(days: int = 30) -> Load:
                coalesce(sum(elevation_gain_m), 0) AS elevation_m,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load
           FROM activity
-         WHERE local_date > current_date - 7
+         WHERE local_date > date('now', 'localtime', '-7 days')
         """
     )
     previous = _safe(
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load
           FROM activity
-         WHERE local_date > current_date - 14 AND local_date <= current_date - 7
+         WHERE local_date > date('now', 'localtime', '-14 days')
+           AND local_date <= date('now', 'localtime', '-7 days')
         """
     )
     month = _safe(
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity WHERE local_date > current_date - 28
+          FROM activity WHERE local_date > date('now', 'localtime', '-28 days')
         """
     )
 
@@ -202,22 +203,35 @@ def load(days: int = 30) -> Load:
 
 
 def recent_activities(limit: int = 60) -> list[dict[str, Any]]:
-    return _safe(
+    """Dernières sorties, sources rétablies en liste.
+
+    SQLite ne sait pas agréger en tableau : `group_concat` rend une chaîne,
+    qu'on redécoupe ici pour que l'affichage garde un contrat stable.
+    """
+    rows = _safe(
         """
         SELECT a.start_time_local, a.sport, a.name, a.distance_m, a.elevation_gain_m,
                a.elapsed_s, a.avg_hr, a.max_hr,
                coalesce(a.training_load, a.trimp) AS load,
                a.has_streams, g.name AS gear_name,
-               array_agg(s.source ORDER BY s.source) AS sources
+               group_concat(DISTINCT s.source) AS sources
           FROM activity a
           LEFT JOIN gear g ON g.id = a.gear_id
           LEFT JOIN activity_source s ON s.activity_id = a.id
          GROUP BY a.id, g.name
          ORDER BY a.start_time DESC
-         LIMIT %s
+         LIMIT ?
         """,
         (limit,),
     )
+
+    result = []
+    for row in rows:
+        entry = dict(zip(row.keys(), tuple(row), strict=True))
+        raw = entry.get("sources") or ""
+        entry["sources"] = sorted(s for s in str(raw).split(",") if s)
+        result.append(entry)
+    return result
 
 
 def counts() -> dict[str, int]:
@@ -248,7 +262,7 @@ def recent_runs(limit: int = 12) -> list[dict[str, Any]]:
         """
         SELECT source, mode, status, started_at, finished_at,
                api_calls, items_upserted, error
-          FROM sync_run ORDER BY started_at DESC LIMIT %s
+          FROM sync_run ORDER BY started_at DESC LIMIT ?
         """,
         (limit,),
     )
@@ -258,3 +272,54 @@ def credentials_present() -> dict[str, bool]:
     rows = _safe("SELECT source FROM credential")
     found = {r["source"] for r in rows}
     return {"garmin": "garmin" in found, "strava": "strava" in found}
+
+
+def zone_distribution(days: int = 30) -> list[dict[str, Any]]:
+    """Temps cumulé par zone de fréquence cardiaque sur la période."""
+    return _safe(
+        """
+        SELECT z.zone_index, sum(z.seconds) AS seconds
+          FROM activity_zone_time z
+          JOIN activity a ON a.id = z.activity_id
+         WHERE z.metric = 'hr'
+           AND a.local_date > date('now', 'localtime', ? || ' days')
+         GROUP BY z.zone_index ORDER BY z.zone_index
+        """,
+        (-days,),
+    )
+
+
+def sport_breakdown(days: int = 30) -> list[dict[str, Any]]:
+    """Volume par discipline, du plus pratiqué au moins pratiqué."""
+    return _safe(
+        """
+        SELECT sport,
+               count(*) AS sessions,
+               coalesce(sum(elapsed_s), 0) AS duration_s,
+               coalesce(sum(distance_m), 0) AS distance_m,
+               coalesce(sum(elevation_gain_m), 0) AS elevation_m
+          FROM activity
+         WHERE local_date > date('now', 'localtime', ? || ' days')
+         GROUP BY sport ORDER BY duration_s DESC
+        """,
+        (-days,),
+    )
+
+
+def weekly_load(days: int = 90) -> list[dict[str, Any]]:
+    """Charge agrégée par semaine ISO.
+
+    `strftime('%W')` numérote les semaines à partir du lundi, ce qui
+    correspond au découpage utilisé partout ailleurs dans Cairn.
+    """
+    return _safe(
+        """
+        SELECT strftime('%Y-%W', local_date) AS week,
+               coalesce(sum(coalesce(training_load, trimp)), 0) AS load,
+               count(*) AS sessions
+          FROM activity
+         WHERE local_date > date('now', 'localtime', ? || ' days')
+         GROUP BY week ORDER BY week
+        """,
+        (-days,),
+    )

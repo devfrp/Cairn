@@ -29,22 +29,21 @@ class RunStats:
 
 
 def start_run(source: str, mode: str) -> int:
-    row = fetch_one(
-        "INSERT INTO sync_run (source, mode) VALUES (%s, %s) RETURNING id",
-        (source, mode),
-    )
-    assert row is not None
-    return row["id"]
+    with connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO sync_run (source, mode) VALUES (?, ?)", (source, mode)
+        )
+        return cur.lastrowid
 
 
 def finish_run(run_id: int, status: str, stats: RunStats, error: str | None = None) -> None:
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
+    with connection() as conn:
+        conn.execute(
             """
             UPDATE sync_run
-               SET finished_at = now(), status = %s, api_calls = %s,
-                   items_fetched = %s, items_upserted = %s, error = %s, detail = %s
-             WHERE id = %s
+               SET finished_at = datetime('now'), status = ?, api_calls = ?,
+                   items_fetched = ?, items_upserted = ?, error = ?, detail = ?
+             WHERE id = ?
             """,
             (
                 status,
@@ -65,21 +64,21 @@ def finish_run(run_id: int, status: str, stats: RunStats, error: str | None = No
 
 def get_cursor(source: str, resource: str) -> dict[str, Any]:
     """Curseur d'une ressource, créé à la volée s'il n'existe pas."""
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
+    with connection() as conn:
+        conn.execute(
             """
-            INSERT INTO sync_cursor (source, resource) VALUES (%s, %s)
+            INSERT INTO sync_cursor (source, resource) VALUES (?, ?)
             ON CONFLICT (source, resource) DO NOTHING
             """,
             (source, resource),
         )
-        cur.execute(
-            "SELECT * FROM sync_cursor WHERE source = %s AND resource = %s",
-            (source, resource),
-        )
-        row = cur.fetchone()
+
+    row = fetch_one(
+        "SELECT * FROM sync_cursor WHERE source = ? AND resource = ?",
+        (source, resource),
+    )
     assert row is not None
-    return row
+    return dict(zip(row.keys(), tuple(row), strict=True))
 
 
 def mark_success(
@@ -92,40 +91,42 @@ def mark_success(
     backfill_done: bool | None = None,
 ) -> None:
     """Enregistre une passe réussie. Les champs à None ne sont pas touchés."""
-    sets = ["last_success_at = now()", "consecutive_errors = 0"]
+    sets = ["last_success_at = datetime('now')", "consecutive_errors = 0"]
     params: list[Any] = []
     if incremental_from is not None:
-        sets.append("incremental_from = %s")
+        sets.append("incremental_from = ?")
         params.append(incremental_from)
     if last_external_id is not None:
-        sets.append("last_external_id = %s")
+        sets.append("last_external_id = ?")
         params.append(last_external_id)
     if backfill_cursor is not None:
-        sets.append("backfill_cursor = %s")
+        sets.append("backfill_cursor = ?")
         params.append(backfill_cursor)
     if backfill_done is not None:
-        sets.append("backfill_done = %s")
-        params.append(backfill_done)
+        sets.append("backfill_done = ?")
+        params.append(int(backfill_done))
     params += [source, resource]
 
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"UPDATE sync_cursor SET {', '.join(sets)} WHERE source = %s AND resource = %s",  # noqa: S608
+    with connection() as conn:
+        conn.execute(
+            f"UPDATE sync_cursor SET {', '.join(sets)} WHERE source = ? AND resource = ?",  # noqa: S608
             params,
         )
 
 
 def mark_error(source: str, resource: str) -> int:
     """Incrémente le compteur d'erreurs. Retourne sa nouvelle valeur."""
-    with connection() as conn, conn.cursor() as cur:
-        cur.execute(
+    with connection() as conn:
+        conn.execute(
             """
             UPDATE sync_cursor
                SET consecutive_errors = consecutive_errors + 1
-             WHERE source = %s AND resource = %s
-            RETURNING consecutive_errors
+             WHERE source = ? AND resource = ?
             """,
             (source, resource),
         )
-        row = cur.fetchone()
+        row = conn.execute(
+            "SELECT consecutive_errors FROM sync_cursor WHERE source = ? AND resource = ?",
+            (source, resource),
+        ).fetchone()
     return row["consecutive_errors"] if row else 0

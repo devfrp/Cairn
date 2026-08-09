@@ -15,7 +15,7 @@ from pathlib import Path
 
 import structlog
 
-from cairn.db import connection
+from cairn.db import get_connection
 
 log = structlog.get_logger(__name__)
 
@@ -51,17 +51,15 @@ def _discover(directory: Path) -> list[Path]:
 
 
 def _applied(conn) -> dict[str, bytes]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1 FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_name = 'schema_migration'
-            """
-        )
-        if cur.fetchone() is None:
-            return {}
-        cur.execute("SELECT version, sha256 FROM schema_migration")
-        return {r["version"]: bytes(r["sha256"]) for r in cur.fetchall()}
+    found = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration'"
+    ).fetchone()
+    if found is None:
+        return {}
+    return {
+        row["version"]: bytes(row["sha256"])
+        for row in conn.execute("SELECT version, sha256 FROM schema_migration")
+    }
 
 
 def upgrade(directory: Path | None = None) -> list[str]:
@@ -73,8 +71,7 @@ def upgrade(directory: Path | None = None) -> list[str]:
         return []
 
     applied_now: list[str] = []
-    with connection() as conn:
-        already = _applied(conn)
+    already = _applied(get_connection())
 
     for path in files:
         version = path.stem
@@ -90,12 +87,15 @@ def upgrade(directory: Path | None = None) -> list[str]:
             continue
 
         log.info("application de la migration", version=version)
-        with connection() as conn, conn.cursor() as cur:
-            cur.execute(body)
-            cur.execute(
-                "INSERT INTO schema_migration (version, sha256) VALUES (%s, %s)",
-                (version, digest),
-            )
+        conn = get_connection()
+        # executescript enchaîne plusieurs instructions et ouvre sa propre
+        # transaction : on ne peut pas l'imbriquer dans un BEGIN explicite.
+        conn.executescript(body)
+        conn.execute(
+            "INSERT INTO schema_migration (version, sha256) VALUES (?, ?)",
+            (version, digest),
+        )
+        conn.commit()
         applied_now.append(version)
 
     if not applied_now:
