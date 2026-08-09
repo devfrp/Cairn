@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cairn — your Garmin and Strava data, together, at home</title>
+<meta name="description" content="Self-hosted app that pulls Garmin Connect and Strava into a PostgreSQL database you control, and cross-references recovery against training load.">
+<link rel="icon" href="../assets/cairn.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="alternate" hreflang="fr" href="../">
+<link rel="alternate" hreflang="en" href="./">
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="../assets/cairn.svg" alt="">
+      <span>Cairn</span>
+    </a>
+    <nav>
+      <a href="#downloads">Download</a>
+      <a href="https://github.com/devfrp/Cairn">GitHub</a>
+      <a href="../" hreflang="fr">FR</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="hero wrap">
+  <h1>Your Garmin and Strava data, together, at home.</h1>
+  <p class="lede">
+    Garmin knows how you slept. Strava knows what you rode. Neither puts the
+    two side by side, because they don't talk to each other. Cairn does — on
+    your own server, in a database you control.
+  </p>
+  <div class="actions">
+    <a class="btn btn-primary" href="#downloads">Download the app</a>
+    <a class="btn btn-ghost" href="https://github.com/devfrp/Cairn">Source code</a>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>The problem</h2>
+    <p>
+      You string together a heavy week. Your HRV has been dropping for three
+      nights and your resting heart rate is creeping up — Garmin knows that.
+      You've stacked up enduro descents and a three-hour road ride — Strava
+      knows that. Nobody puts the two together, and that is exactly where a
+      building overload shows up.
+    </p>
+    <p>
+      Cairn syncs both sources into one database, recognises that a ride
+      appearing on both sides is a single ride, and lines a night's recovery
+      up against the same day's training.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What it does</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Nightly sync</h3>
+        <p>
+          One pass per night into your database. Raw JSON and the original
+          <code>.fit</code> files are archived: nothing is lost, everything
+          can be replayed.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Deduplication</h3>
+        <p>
+          A ride recorded on your watch lands in both Garmin and Strava. Cairn
+          keeps one, taking the sensors from one and the gear from the other.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Recovery × load</h3>
+        <p>
+          Sleep, HRV and resting heart rate aligned to the same date as your
+          activities. The join neither Garmin nor Strava can make.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Weekly summary</h3>
+        <p>
+          The app ships with its own model: your week is put into words
+          offline, with nothing to install. It computes nothing — every figure
+          comes from the database, and any it invents is rejected.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Desktop application</h3>
+        <p>
+          One window to link your accounts, trigger a sync and read the
+          essentials. Portable: kept next to its settings file, it runs from
+          a USB stick.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Second-by-second streams</h3>
+        <p>
+          <code>.fit</code> files are decoded into 1 Hz series in TimescaleDB:
+          exact heart rate zones, cardiac drift, fine-grained ride analysis.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Project status</h2>
+    <p>
+      Cairn is under construction and has no stable release yet. Here is the
+      real state of things, unvarnished.
+    </p>
+    <ul class="status">
+      <li><span class="tag tag-ok">Done</span> <span>Database schema, Garmin and Strava sync, deduplication, resumable cursors</span></li>
+      <li><span class="tag tag-ok">Done</span> <span><code>.fit</code> decoding, heart rate zones, TRIMP training load</span></li>
+      <li><span class="tag tag-ok">Done</span> <span>Provisioned Grafana dashboards, docker-compose deployment</span></li>
+      <li><span class="tag tag-wip">In progress</span> <span>Chronic and acute load (CTL / ATL / TSB), HRV baselines, overload detection</span></li>
+      <li><span class="tag tag-ok">Done</span> <span>Weekly summary written by a local model (Ollama), Discord delivery</span></li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Install the server</h2>
+    <p>
+      The server is a docker-compose stack: PostgreSQL with TimescaleDB, the
+      sync service, and Grafana. Built to run in an LXC container or a small
+      VM.
+    </p>
+<pre><code>git clone https://github.com/devfrp/Cairn.git &amp;&amp; cd Cairn
+cp .env.example .env
+# fill in the passwords and the encryption key
+docker compose up -d</code></pre>
+    <p>
+      Then link your accounts. Since Garmin has no public API for individual
+      use, Cairn opens a session and keeps the token encrypted at rest — your
+      password is never stored.
+    </p>
+<pre><code>docker compose run --rm cairn auth garmin
+docker compose run --rm cairn auth strava</code></pre>
+  </div>
+</section>
+
+<section id="downloads">
+  <div class="wrap">
+    <h2>Download the app</h2>
+    <p>
+      A standalone desktop application: nothing to install, no Python
+      interpreter needed. It connects to your own database and is where you
+      link your accounts, run syncs and read the essentials at a glance. The
+      server itself stays deployed by docker-compose.
+    </p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Platform</th><th>File</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Linux x86-64</td>
+            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-x86_64.AppImage">Cairn-x86_64.AppImage</a></td>
+            <td class="note"><code>chmod +x</code> then run</td>
+          </tr>
+          <tr>
+            <td>Windows x86-64</td>
+            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-windows-x86_64.zip">Cairn-windows-x86_64.zip</a></td>
+            <td class="note">Unzip, then run <code>Cairn.exe</code></td>
+          </tr>
+          <tr>
+            <td>macOS Apple Silicon</td>
+            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-arm64.dmg">Cairn-macos-arm64.dmg</a></td>
+            <td class="note">Not notarised: <code>xattr -dr com.apple.quarantine</code></td>
+          </tr>
+          <tr>
+            <td>macOS Intel</td>
+            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-x86_64.dmg">Cairn-macos-x86_64.dmg</a></td>
+            <td class="note">Not notarised: <code>xattr -dr com.apple.quarantine</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <p>
+        Each package carries its own language engine and the
+        <code>qwen3:0.6b</code> model — hence its size, around 800 MB. That is
+        the price of a summary that works offline, with nothing to install and
+        no data leaving the machine. If you already run Ollama, put its
+        address in the settings and Cairn will use that instead.
+      </p>
+      <p style="margin-top:12px">
+        Every file ships with its SHA-256 checksum. The packages are neither
+        signed nor notarised, so Windows and macOS will warn you on first
+        launch.
+      </p>
+    </div>
+
+    <p style="margin-top:28px">On Linux and macOS, in one command:</p>
+<pre><code>curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Your data stays yours</h2>
+    <p>
+      Cairn only talks to Garmin and Strava, and only to fetch your own data.
+      No third-party service, no telemetry, no account to create. The database
+      and activity files live on your machine, and the page you're reading
+      loads no remote fonts and no external scripts.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="https://github.com/devfrp/Cairn">Source code</a> ·
+      <a href="../" hreflang="fr">Version française</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

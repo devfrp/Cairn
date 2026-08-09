@@ -1,0 +1,128 @@
+{
+  "uid": "cairn-overview",
+  "title": "Cairn — récupération et charge",
+  "tags": ["cairn"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30m",
+  "time": { "from": "now-90d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Charge d'entraînement par jour",
+      "description": "Somme de la charge Garmin des activités du jour, toutes disciplines confondues.",
+      "datasource": { "type": "postgres", "uid": "cairn-postgres" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 0 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT local_date::timestamp AS time, sport, sum(coalesce(training_load, trimp, 0)) AS value FROM activity WHERE $__timeFilter(local_date) GROUP BY local_date, sport ORDER BY local_date"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HRV nocturne et baseline",
+      "description": "La baseline est celle calculée par Garmin. Une HRV qui décroche sous la borne basse plusieurs nuits de suite est le signal de fatigue à surveiller.",
+      "datasource": { "type": "postgres", "uid": "cairn-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 5 }, "unit": "ms" },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "baseline.*" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [6, 6], "fill": "dash" } },
+              { "id": "custom.lineWidth", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT day::timestamp AS time, avg_hrv_ms AS \"HRV\", baseline_balanced_low AS \"baseline basse\", baseline_balanced_high AS \"baseline haute\" FROM hrv_night WHERE $__timeFilter(day) ORDER BY day"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Sommeil et FC de repos",
+      "datasource": { "type": "postgres", "uid": "cairn-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "FC repos" },
+            "properties": [{ "id": "unit", "value": "bpm" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "durée sommeil" },
+            "properties": [{ "id": "unit", "value": "h" }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT s.sleep_date::timestamp AS time, s.score AS \"score sommeil\", round(s.duration_s / 3600.0, 2) AS \"durée sommeil\", w.resting_hr AS \"FC repos\" FROM sleep_session s LEFT JOIN daily_wellness w ON w.athlete_id = s.athlete_id AND w.day = s.sleep_date WHERE $__timeFilter(s.sleep_date) ORDER BY s.sleep_date"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Dernières sorties et récupération du matin",
+      "description": "Chaque activité en regard de l'état de récupération mesuré au réveil du même jour.",
+      "datasource": { "type": "postgres", "uid": "cairn-postgres" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT start_time_local AS \"date\", sport, name AS \"sortie\", round(distance_m / 1000.0, 1) AS \"km\", round(elevation_gain_m) AS \"D+\", round(elapsed_s / 60.0) AS \"min\", avg_hr AS \"FC moy\", training_load AS \"charge\", hrv_ms AS \"HRV\", sleep_score AS \"sommeil\" FROM marts.v_activity_with_recovery WHERE $__timeFilter(start_time_local) ORDER BY start_time_local DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Body battery et stress (intra-journée)",
+      "datasource": { "type": "postgres", "uid": "cairn-postgres" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10 }, "max": 100, "min": 0 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time, metric AS metric, value FROM wellness_reading WHERE $__timeFilter(time) AND metric IN ('body_battery', 'stress') ORDER BY time"
+        }
+      ]
+    }
+  ]
+}

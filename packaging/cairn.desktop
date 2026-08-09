@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cairn
+GenericName=Suivi santé et sport
+Comment=Réunit vos données Garmin et Strava dans une base que vous contrôlez
+Exec=Cairn
+Icon=cairn
+Terminal=false
+Categories=Utility;
+Keywords=garmin;strava;sport;entrainement;velo;trail;

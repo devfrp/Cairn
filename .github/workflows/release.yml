@@ -1,0 +1,261 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Moteur et modèle embarqués dans l'application. Le modèle est petit à
+  # dessein : Cairn ne lui demande que de rédiger des valeurs déjà calculées.
+  OLLAMA_VERSION: "v0.5.7"
+  OLLAMA_MODEL: "qwen3:0.6b"
+
+jobs:
+  # Une application cassée publiée est pire que pas d'application du tout.
+  test:
+    runs-on: ubuntu-22.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Bibliothèques système requises par Qt en mode hors écran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libdbus-1-3
+      - run: pip install -e ".[gui,dev]"
+      - run: ruff check src tests
+      - run: pytest -q
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 plutôt que latest : une glibc plus ancienne élargit
+          # le parc de distributions capables de lancer l'AppImage.
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: windows-latest
+            target: windows-x86_64
+          - os: macos-13
+            target: macos-x86_64
+          - os: macos-14
+            target: macos-arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Bibliothèques système requises par Qt
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libdbus-1-3 \
+                                  libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 \
+                                  libxcb-shape0 fuse
+
+      - name: Installer les dépendances
+        run: pip install -e ".[gui,build]"
+
+      - name: Générer les icônes natives
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python packaging/make_icons.py
+
+      - name: Récupérer le moteur Ollama et le modèle
+        run: python packaging/fetch_ollama.py --version ${{ env.OLLAMA_VERSION }} --model ${{ env.OLLAMA_MODEL }}
+
+      - name: Compiler l'application
+        run: pyinstaller --clean --noconfirm --distpath dist --workpath build/gui packaging/cairn-gui.spec
+
+      - name: Compiler la CLI
+        run: pyinstaller --clean --noconfirm --distpath dist-cli --workpath build/cli packaging/cairn.spec
+
+      - name: Vérifier la CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=dist-cli/cairn
+          [ "${{ runner.os }}" = "Windows" ] && BIN=dist-cli/cairn.exe
+          "$BIN" --help > /dev/null
+          # Sans les migrations embarquées, « db upgrade » ne ferait rien
+          # une fois l'outil distribué.
+          "$BIN" db migrations
+
+      - name: Vérifier le contenu du paquet
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=dist/Cairn/Cairn
+          [ "${{ runner.os }}" = "Windows" ] && APP=dist/Cairn/Cairn.exe
+          [ "${{ runner.os }}" = "macOS" ] && APP=dist/Cairn.app/Contents/MacOS/Cairn
+          # Sort en erreur si le moteur ou le modèle manquent : un paquet
+          # incomplet ne doit pas être publié comme s'il était autonome.
+          "$APP" --selftest
+
+      - name: Vérifier que l'application démarre
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          CAIRN_DB_TIMEOUT: "2"
+        run: |
+          set -euo pipefail
+          ./dist/Cairn/Cairn &
+          PID=$!
+          sleep 20
+          if kill -0 $PID 2>/dev/null; then
+            echo "Démarrage réussi."
+            kill $PID
+          else
+            echo "L'application s'est arrêtée seule." >&2
+            exit 1
+          fi
+
+      # ---------------- Linux : AppImage ----------------
+      - name: Assembler l'AppImage
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          APPDIR=build/Cairn.AppDir
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib"
+          # L'application est un dossier : moteur Ollama et modèle vivent à
+          # côté de l'exécutable et sont lus sur place, sans redéploiement.
+          cp -r dist/Cairn "$APPDIR/usr/lib/cairn"
+          cp dist-cli/cairn "$APPDIR/usr/bin/cairn"
+          cp packaging/cairn.desktop "$APPDIR/cairn.desktop"
+          cp packaging/cairn.png "$APPDIR/cairn.png"
+          cp packaging/cairn.png "$APPDIR/.DirIcon"
+
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          # Lancée sous le nom « cairn », l'AppImage donne la ligne de
+          # commande ; sinon, l'application graphique.
+          case "$(basename "$ARGV0" 2>/dev/null || echo Cairn)" in
+              cairn|cairn-cli) exec "$HERE/usr/bin/cairn" "$@" ;;
+              *)               exec "$HERE/usr/lib/cairn/Cairn" "$@" ;;
+          esac
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run \
+            "$APPDIR" "artifacts/Cairn-x86_64.AppImage"
+
+          cp dist-cli/cairn "artifacts/cairn-cli-linux-x86_64"
+
+      # ---------------- macOS : dmg ----------------
+      - name: Assembler le dmg
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          STAGING=build/dmg
+          mkdir -p "$STAGING"
+          cp -R "dist/Cairn.app" "$STAGING/Cairn.app"
+          cp dist-cli/cairn "$STAGING/cairn (ligne de commande)"
+          cp packaging/macos-README.txt "$STAGING/LISEZ-MOI.txt"
+          # Raccourci habituel : on dépose l'application dedans.
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "Cairn" -srcfolder "$STAGING" -ov -format UDZO \
+            "artifacts/Cairn-${{ matrix.target }}.dmg"
+
+      # ---------------- Windows ----------------
+      - name: Rassembler les fichiers Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp dist-cli/cairn.exe "dist/Cairn/cairn-cli.exe"
+          # Un exécutable unique embarquant le moteur et le modèle se
+          # redéploierait à chaque lancement : on livre le dossier compressé,
+          # que l'on décompresse une fois pour toutes.
+          powershell -Command "Compress-Archive -Path dist/Cairn/* -DestinationPath artifacts/Cairn-windows-x86_64.zip -CompressionLevel Optimal"
+          cp dist-cli/cairn.exe "artifacts/cairn-cli-windows-x86_64.exe"
+
+      - name: Calculer les empreintes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          shopt -s nullglob
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sha256) continue ;; esac
+            if command -v sha256sum > /dev/null; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cairn-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publier la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            Application de bureau Cairn, sans installation ni interpréteur
+            Python à prévoir. Elle se connecte à votre propre base ; le
+            serveur (PostgreSQL, Grafana) se déploie séparément avec
+            `docker compose up -d`.
+
+            | Système | Fichier |
+            |---|---|
+            | Linux | `Cairn-x86_64.AppImage` — `chmod +x` puis lancer |
+            | Windows | `Cairn-windows-x86_64.zip` — décompresser puis lancer `Cairn.exe` |
+            | macOS Apple Silicon | `Cairn-macos-arm64.dmg` |
+            | macOS Intel | `Cairn-macos-x86_64.dmg` |
+
+            La ligne de commande, pour les tâches planifiées, est fournie à
+            part (`cairn-cli-*`) et incluse dans l'AppImage, le dmg et
+            l'archive Windows.
+
+            Chaque paquet embarque son propre moteur Ollama et le modèle
+            `qwen3:0.6b`, ce qui explique sa taille : le résumé hebdomadaire
+            fonctionne sans rien installer et sans qu'aucune donnée ne quitte
+            la machine. Renseigner une adresse Ollama dans les réglages fait
+            passer Cairn sur cette instance à la place.
+
+            **macOS** : application ni signée ni notarisée. Au premier
+            lancement, `xattr -dr com.apple.quarantine /Applications/Cairn.app`.
+
+            **Windows** : exécutable non signé, SmartScreen demandera une
+            confirmation.
+
+            Chaque fichier est accompagné de son empreinte SHA-256.

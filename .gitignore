@@ -1,0 +1,29 @@
+.env
+.venv/
+
+# Réglages d'outils locaux : ils n'ont rien à faire dans un dépôt partagé.
+# Ignorés ici plutôt que dans la configuration globale, que tous les clients
+# git n'honorent pas — GitHub Desktop les proposait au commit.
+.claude/
+.idea/
+.vscode/
+data/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Icônes produites au moment de la compilation depuis packaging/cairn.svg
+packaging/cairn.png
+packaging/cairn.ico
+packaging/cairn.icns
+packaging/cairn.iconset/
+dist-cli/
+
+# Moteur Ollama et modèle récupérés à la compilation
+packaging/vendor/

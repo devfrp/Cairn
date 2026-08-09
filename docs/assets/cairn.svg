@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Cairn">
+  <title>Cairn</title>
+  <defs>
+    <linearGradient id="fond" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3138"/>
+      <stop offset="1" stop-color="#1a1e23"/>
+    </linearGradient>
+    <linearGradient id="pierre" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2ede4"/>
+      <stop offset="1" stop-color="#cdc4b6"/>
+    </linearGradient>
+    <linearGradient id="pierreHaute" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8834a"/>
+      <stop offset="1" stop-color="#c25e2a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#fond)"/>
+
+  <!-- Empilement de galets, du plus large au plus petit.
+       Les décalages horizontaux évitent l'effet « pile de jetons ». -->
+  <g fill="url(#pierre)">
+    <ellipse cx="128" cy="196" rx="62" ry="21" transform="rotate(-2 128 196)"/>
+    <ellipse cx="124" cy="160" rx="50" ry="18" transform="rotate(3 124 160)"/>
+    <ellipse cx="132" cy="128" rx="40" ry="15" transform="rotate(-4 132 128)"/>
+    <ellipse cx="125" cy="101" rx="29" ry="12" transform="rotate(5 125 101)"/>
+  </g>
+
+  <!-- La pierre de faîte, celle qu'on pose en arrivant. -->
+  <ellipse cx="130" cy="79" rx="18" ry="9" fill="url(#pierreHaute)" transform="rotate(-6 130 79)"/>
+</svg>
