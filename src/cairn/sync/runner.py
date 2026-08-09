@@ -50,4 +50,16 @@ def run_source(source: str, mode: str) -> tuple[str, RunStats]:
 
 def run_all(mode: str = "incremental", sources: list[str] | None = None) -> dict[str, str]:
     targets = sources or list(SOURCES)
-    return {source: run_source(source, mode)[0] for source in targets}
+    results = {source: run_source(source, mode)[0] for source in targets}
+
+    # Charge chronique, lignes de base et signaux se déduisent de tout
+    # l'historique : ils sont recalculés dès que celui-ci a bougé.
+    if any(status != "failed" for status in results.values()):
+        try:
+            from cairn.metrics.compute import recompute
+
+            recompute()
+        except Exception as exc:  # noqa: BLE001 — la synchronisation reste acquise
+            log.error("recalcul des métriques en échec", error=str(exc), exc_info=True)
+
+    return results

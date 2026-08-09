@@ -62,6 +62,16 @@ class DashboardPage(QWidget):
             )
         )
 
+        # Bandeau de signaux, en tête : c'est ce qui doit sauter aux yeux.
+        self.signals = QLabel("")
+        self.signals.setObjectName("CardHint")
+        self.signals.setWordWrap(True)
+        self.signals.setTextFormat(Qt.TextFormat.RichText)
+        self.signals_card = Card()
+        self.signals_card.layout().addWidget(self.signals)
+        self.signals_card.hide()
+        layout.addWidget(self.signals_card)
+
         # --- récupération ---
         self.hrv = StatCard("Variabilité cardiaque")
         self.sleep = StatCard("Sommeil")
@@ -110,6 +120,18 @@ class DashboardPage(QWidget):
         ):
             load_grid.addWidget(card, 0, index)
         layout.addLayout(load_grid)
+
+        # --- charge chronique et forme ---
+        self.ctl = StatCard("Condition (CTL)")
+        self.atl = StatCard("Fatigue (ATL)")
+        self.tsb = StatCard("Forme (TSB)")
+        self.acwr = StatCard("Rapport aigu / chronique")
+
+        fitness_grid = QGridLayout()
+        fitness_grid.setSpacing(14)
+        for index, card in enumerate((self.ctl, self.atl, self.tsb, self.acwr)):
+            fitness_grid.addWidget(card, 0, index)
+        layout.addLayout(fitness_grid)
 
         layout.addWidget(self._build_summary())
 
@@ -224,6 +246,8 @@ class DashboardPage(QWidget):
 
         self._fill_recovery(recovery)
         self._fill_load(load)
+        self._fill_fitness(queries.fitness())
+        self._fill_signals(queries.active_flags())
 
         self.hrv_spark.set_values(recovery.hrv_series, theme.SERIES[1])
         self.rhr_spark.set_values(recovery.rhr_series, theme.SERIES[2])
@@ -303,10 +327,62 @@ class DashboardPage(QWidget):
         self.week_elevation.set_value(format_elevation(load.week_elevation_m), "cumulé")
         self.month_load.set_value(f"{load.month_load:.0f}", "sur 4 semaines")
 
+    def _fill_fitness(self, fitness: queries.Fitness) -> None:
+        """Charge chronique, aiguë et forme.
+
+        Les sigles physiologiques sont doublés d'un mot courant : « CTL » ne
+        dit rien tant qu'on n'a pas lu la littérature.
+        """
+        if fitness.ctl is None:
+            for card in (self.ctl, self.atl, self.tsb, self.acwr):
+                card.set_value("—", "Pas encore calculé")
+            return
+
+        self.ctl.set_value(f"{fitness.ctl:.0f}", "charge encaissée sur six semaines")
+        self.atl.set_value(f"{fitness.atl:.0f}", "charge des sept derniers jours")
+
+        tsb = fitness.tsb or 0
+        if tsb > 5:
+            hint, colour = "reposé, prêt à encaisser", theme.OK
+        elif tsb < -20:
+            hint, colour = "fatigue accumulée", theme.DANGER
+        elif tsb < -5:
+            hint, colour = "en charge, normal en bloc", theme.WARN
+        else:
+            hint, colour = "à l'équilibre", theme.OK
+        self.tsb.set_value(f"{tsb:+.0f}", hint, colour)
+
+        if fitness.acwr is None:
+            self.acwr.set_value("—", "historique trop court")
+        else:
+            from cairn.metrics.signals import ACWR_HIGH, ACWR_LOW
+
+            if fitness.acwr > ACWR_HIGH:
+                hint, colour = "progression trop rapide", theme.DANGER
+            elif fitness.acwr < ACWR_LOW:
+                hint, colour = "en dessous de l'habitude", theme.MUTED
+            else:
+                hint, colour = "dans la zone raisonnable", theme.OK
+            self.acwr.set_value(f"{fitness.acwr:.2f}", hint, colour)
+
+    def _fill_signals(self, flags: list) -> None:
+        if not flags:
+            self.signals_card.hide()
+            return
+
+        colours = {"alert": theme.DANGER, "warn": theme.WARN, "info": theme.MUTED}
+        self.signals.setText("<br>".join(
+            f"<span style='color:{colours.get(f['severity'], theme.MUTED)}'>●</span> "
+            f"{f['message']}"
+            for f in flags[:4]
+        ))
+        self.signals_card.show()
+
     def _show_unavailable(self, health: queries.Health) -> None:
+        self.signals_card.hide()
         for card in (self.hrv, self.sleep, self.rhr, self.battery,
                      self.week_load, self.week_volume, self.week_elevation,
-                     self.month_load):
+                     self.month_load, self.ctl, self.atl, self.tsb, self.acwr):
             card.set_value("—", "")
         for spark in (self.hrv_spark, self.rhr_spark, self.load_spark):
             spark.set_values([])

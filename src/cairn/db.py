@@ -257,6 +257,23 @@ def store_raw(
     return existing["id"], False
 
 
+def as_date(value: Any) -> dt.date | None:
+    """Convertit en date une valeur venue d'une expression SQL.
+
+    La conversion automatique ne s'applique qu'aux colonnes déclarées : dès
+    qu'une date passe par `min()`, `max()` ou une sous-requête, SQLite rend
+    la chaîne brute. Cette fonction rattrape ces cas.
+    """
+    if value is None or isinstance(value, dt.date) and not isinstance(value, dt.datetime):
+        return value
+    if isinstance(value, dt.datetime):
+        return value.date()
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 def load_json(value: Any) -> Any:
     """Décode une colonne JSON stockée en texte."""
     if value is None or isinstance(value, (dict, list)):

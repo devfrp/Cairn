@@ -323,3 +323,57 @@ def weekly_load(days: int = 90) -> list[dict[str, Any]]:
         """,
         (-days,),
     )
+
+
+@dataclass
+class Fitness:
+    """État de forme au sens de la charge d'entraînement."""
+
+    ctl: float | None = None
+    atl: float | None = None
+    tsb: float | None = None
+    acwr: float | None = None
+    monotony: float | None = None
+    ctl_series: list[float | None] = field(default_factory=list)
+    tsb_series: list[float | None] = field(default_factory=list)
+
+
+def fitness(days: int = 90) -> Fitness:
+    """Charge chronique, aiguë et forme, telles que calculées en dernier."""
+    rows = _safe(
+        """
+        SELECT day, ctl, atl, tsb, acwr, monotony
+          FROM marts_daily_load
+         WHERE day > date('now', 'localtime', ? || ' days')
+         ORDER BY day
+        """,
+        (-days,),
+    )
+    if not rows:
+        return Fitness()
+
+    latest = rows[-1]
+    return Fitness(
+        ctl=latest["ctl"],
+        atl=latest["atl"],
+        tsb=latest["tsb"],
+        acwr=latest["acwr"],
+        monotony=latest["monotony"],
+        ctl_series=[r["ctl"] for r in rows],
+        tsb_series=[r["tsb"] for r in rows],
+    )
+
+
+def active_flags(days: int = 10) -> list[dict[str, Any]]:
+    """Signaux récents non acquittés, du plus grave au plus récent."""
+    return _safe(
+        """
+        SELECT day, kind, severity, message
+          FROM marts_flag
+         WHERE acknowledged = 0
+           AND day > date('now', 'localtime', ? || ' days')
+         ORDER BY CASE severity WHEN 'alert' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
+                  day DESC
+        """,
+        (-days,),
+    )

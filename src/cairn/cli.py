@@ -171,6 +171,27 @@ def streams(
     )
 
 
+@app.command("metrics")
+def metrics() -> None:
+    """Recalcule charge chronique, lignes de base et signaux de surcharge."""
+    from cairn.metrics.compute import recompute
+
+    totals = recompute()
+    typer.echo(f"{totals['days']} jours recalculés, {totals['flags']} signal(aux)")
+
+    from cairn.db import fetch_all
+
+    rows = fetch_all(
+        """
+        SELECT day, severity, message FROM marts_flag
+         WHERE day > date('now', 'localtime', '-14 days')
+         ORDER BY day DESC, severity
+        """
+    )
+    for row in rows:
+        typer.echo(f"  {row['day']}  [{row['severity']}] {row['message']}")
+
+
 @app.command("summary")
 def summary(
     send: Annotated[bool, typer.Option(help="Envoyer sur Discord")] = False,
