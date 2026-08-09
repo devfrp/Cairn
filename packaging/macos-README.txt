@@ -16,8 +16,8 @@ votre base PostgreSQL, générez une clé de chiffrement, installez le schéma,
 puis reliez vos comptes Garmin et Strava.
 
 Le serveur lui-même (PostgreSQL avec TimescaleDB, et Grafana pour les
-graphiques détaillés) se déploie séparément avec docker compose. Voir la
-documentation du projet.
+graphiques détaillés) s'installe séparément sur la machine qui héberge vos
+données. Voir la documentation du projet.
 
 Ligne de commande
 -----------------

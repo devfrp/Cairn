@@ -231,9 +231,9 @@ jobs:
           generate_release_notes: true
           body: |
             Application de bureau Cairn, sans installation ni interpréteur
-            Python à prévoir. Elle se connecte à votre propre base ; le
-            serveur (PostgreSQL, Grafana) se déploie séparément avec
-            `docker compose up -d`.
+            Python à prévoir. Elle se connecte à votre propre base
+            PostgreSQL, installée séparément sur la machine qui héberge vos
+            données.
 
             | Système | Fichier |
             |---|---|

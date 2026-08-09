@@ -27,7 +27,7 @@ def main() -> None:
         print(
             f"Base de données injoignable sur {location}.\n"
             f"  {type(exc).__name__}: {exc}\n\n"
-            "Vérifier que la base tourne (docker compose ps) et que "
+            "Vérifier que PostgreSQL est démarré et que "
             "CAIRN_DB_DSN pointe au bon endroit.",
             file=sys.stderr,
         )

@@ -27,9 +27,8 @@ Site du projet : <https://devfrp.github.io/Cairn/>
 
 ## Installer l'application
 
-Cairn se compose de deux morceaux : un **serveur** (PostgreSQL avec
-TimescaleDB, Grafana) déployé par docker-compose, et une **application de
-bureau** qui s'y connecte. L'application est publiée en paquet autonome —
+Cairn se compose de deux morceaux : une **base PostgreSQL** qui héberge vos
+données, et une **application de bureau** qui s'y connecte. L'application est publiée en paquet autonome —
 AppImage sous Linux, archive sous Windows, `.dmg` sous macOS — sans
 interpréteur Python ni moteur de langage à installer :
 
@@ -51,40 +50,75 @@ tâches planifiées ; elle est aussi incluse dans l'AppImage et le dmg.
 
 ## Prérequis
 
-- Un hôte Docker (une LXC Debian sur Proxmox fait très bien l'affaire).
+- Une machine avec PostgreSQL 16 et l'extension TimescaleDB (un conteneur
+  LXC Debian fait très bien l'affaire).
 - Un compte Garmin Connect.
 - Une application Strava — à créer sur <https://www.strava.com/settings/api>.
 
-## Installation
+## Installer la base
+
+Sur Debian ou Ubuntu, avec les dépôts officiels de TimescaleDB :
 
 ```bash
-git clone https://github.com/devfrp/Cairn.git && cd Cairn
-cp .env.example .env
+sudo apt install -y postgresql-16 postgresql-16-timescaledb
+sudo timescaledb-tune --quiet --yes && sudo systemctl restart postgresql
 ```
 
-Générer la clé de chiffrement des credentials :
+Créer le rôle et la base :
 
 ```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+sudo -u postgres createuser --pwprompt cairn
+sudo -u postgres createdb --owner=cairn cairn
 ```
 
-Reporter cette valeur dans `CAIRN_SECRET_KEY`, puis renseigner
-`POSTGRES_PASSWORD`, `GRAFANA_PASSWORD` et les identifiants Strava. Démarrer :
+L'application de bureau suffit ensuite : sa page **Réglages** renseigne la
+chaîne de connexion, génère la clé de chiffrement et installe le schéma d'un
+bouton.
+
+## Synchronisation automatique
+
+L'application synchronise à la demande. Pour une passe nocturne sans
+intervention, installez le service sur la machine qui héberge la base :
 
 ```bash
-docker compose up -d
+sudo install -d -o cairn -g cairn /opt/cairn /var/lib/cairn
+sudo -u cairn python3 -m venv /opt/cairn/venv
+sudo -u cairn /opt/cairn/venv/bin/pip install 'cairn @ git+https://github.com/devfrp/Cairn'
 ```
 
-Les migrations s'appliquent au premier démarrage.
+Créer `/etc/cairn/cairn.env` à partir de [.env.example](.env.example) — il
+contient la clé de chiffrement, donc en `0600` :
+
+```bash
+sudo install -D -m 600 .env.example /etc/cairn/cairn.env
+sudo /opt/cairn/venv/bin/cairn keygen
+```
+
+Reporter la clé dans le fichier, puis activer le service :
+
+```bash
+sudo cp packaging/systemd/cairn.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cairn
+```
+
+## Graphiques détaillés
+
+L'application montre l'essentiel. Pour des graphiques fouillés, Grafana se
+branche directement sur la base : le dossier [grafana/](grafana/) contient la
+source de données et les dashboards, à copier dans
+`/etc/grafana/provisioning/`.
 
 ## Authentification
+
+L'application de bureau relie les deux comptes depuis sa page **Réglages**.
+En ligne de commande, pour le service :
 
 Garmin n'a pas d'API publique pour un usage individuel : Cairn ouvre une
 session SSO et conserve le token OAuth (valable environ un an), chiffré en
 base. Le mot de passe n'est pas conservé.
 
 ```bash
-docker compose run --rm cairn auth garmin
+cairn auth garmin
 ```
 
 Si la double authentification est active sur le compte, le code est demandé à
@@ -93,35 +127,31 @@ ce moment-là.
 Pour Strava, le flux OAuth2 se fait en deux temps :
 
 ```bash
-docker compose run --rm cairn auth strava
+cairn auth strava
 ```
 
 La commande affiche une URL. L'ouvrir, autoriser l'application, puis récupérer
 le paramètre `code` dans l'URL de redirection et relancer :
 
 ```bash
-docker compose run --rm cairn auth strava --code COLLER_LE_CODE_ICI
+cairn auth strava --code COLLER_LE_CODE_ICI
 ```
 
 ## Utilisation
 
-La passe nocturne tourne automatiquement à l'heure définie par
-`CAIRN_SYNC_HOUR`. Tant que l'historique n'est pas entièrement rapatrié, elle
+Le service tourne à l'heure définie par `CAIRN_SYNC_HOUR`. Tant que l'historique n'est pas entièrement rapatrié, elle
 enchaîne un lot de rattrapage après la synchronisation du jour.
 
 ```bash
 # état des curseurs et des dernières passes
-docker compose run --rm cairn status
+cairn status
 
 # passe manuelle
-docker compose run --rm cairn sync --source garmin --mode incremental
+cairn sync --source garmin --mode incremental
 
 # rattrapage d'historique à la demande
-docker compose run --rm cairn sync --mode backfill
+cairn sync --mode backfill
 ```
-
-Grafana écoute sur le port 3000, avec la source de données et les dashboards
-déjà provisionnés.
 
 ## Résumé hebdomadaire
 
@@ -146,9 +176,9 @@ paramètres ne raisonne pas, mais met parfaitement en français des valeurs
 déjà établies.
 
 ```bash
-docker compose run --rm cairn check-ollama
-docker compose run --rm cairn summary
-docker compose run --rm cairn summary --send
+cairn check-ollama
+cairn summary
+cairn summary --send
 ```
 
 `--no-model` force la rédaction déterministe, utile pour comparer. Le
@@ -175,7 +205,7 @@ src/cairn/
   gui/             application de bureau (Qt) : pages, réglages, tâches de fond
   sources/         clients Garmin (garth) et Strava (OAuth2 + quota)
   sync/            mappers, déduplication, upserts, orchestration
-packaging/         recettes PyInstaller, icônes
+packaging/         recettes PyInstaller, icônes, unité systemd
 grafana/           source de données et dashboards provisionnés
 ```
 

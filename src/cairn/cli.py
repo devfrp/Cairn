@@ -330,6 +330,18 @@ def scheduler() -> None:
         sched.shutdown()
 
 
+@app.command("keygen")
+def keygen() -> None:
+    """Génère une clé de chiffrement pour les jetons stockés en base.
+
+    À faire une seule fois, à la mise en place. Changer de clé ensuite rend
+    illisibles les jetons Garmin et Strava déjà enregistrés.
+    """
+    from cryptography.fernet import Fernet
+
+    typer.echo(Fernet.generate_key().decode())
+
+
 @app.command("status")
 def status() -> None:
     """Affiche l'état des curseurs et des dernières passes."""

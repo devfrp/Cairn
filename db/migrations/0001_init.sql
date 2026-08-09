@@ -47,7 +47,8 @@ CREATE INDEX ON raw.api_payload (source, endpoint, resource_key, fetched_at DESC
 CREATE INDEX ON raw.api_payload USING gin (payload jsonb_path_ops);
 
 -- Fichiers d'activité originaux (.fit / .gpx / .tcx) archivés sur disque.
--- On stocke le chemin, pas le blob : le volume Docker est sauvegardé par ailleurs.
+-- On stocke le chemin, pas le blob : ces fichiers relèvent de la sauvegarde
+-- du système de fichiers, pas de celle de la base.
 CREATE TABLE raw.activity_file (
     id            bigserial PRIMARY KEY,
     source        text        NOT NULL CHECK (source IN ('garmin', 'strava')),

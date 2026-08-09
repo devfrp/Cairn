@@ -1,0 +1,39 @@
+# Synchronisation nocturne et résumé hebdomadaire de Cairn.
+#
+#   sudo cp packaging/systemd/cairn.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cairn
+#
+# La configuration est lue dans /etc/cairn/cairn.env, qui contient la clé de
+# chiffrement : ce fichier doit rester en 0600.
+
+[Unit]
+Description=Cairn — synchronisation Garmin et Strava
+Documentation=https://github.com/devfrp/Cairn
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cairn
+Group=cairn
+EnvironmentFile=/etc/cairn/cairn.env
+ExecStart=/opt/cairn/venv/bin/cairn scheduler
+Restart=on-failure
+RestartSec=30
+
+# Le service n'a besoin que de son dossier de données : tout le reste du
+# disque lui est inutile, donc interdit.
+StateDirectory=cairn
+ReadWritePaths=/var/lib/cairn
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

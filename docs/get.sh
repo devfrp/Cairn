@@ -4,8 +4,8 @@
 #   curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
 #
 # Télécharge l'application de bureau de la dernière version publiée, vérifie
-# son empreinte SHA-256 et l'installe. Le serveur (base de données et
-# Grafana) se déploie séparément avec docker compose.
+# son empreinte SHA-256 et l'installe. La base de données s'installe
+# séparément, sur la machine qui héberge vos données.
 
 set -eu
 

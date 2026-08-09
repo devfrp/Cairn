@@ -26,8 +26,8 @@ Project site: <https://devfrp.github.io/Cairn/en/>
 
 ## Install the app
 
-Cairn has two parts: a **server** (PostgreSQL with TimescaleDB, Grafana)
-deployed by docker-compose, and a **desktop application** that connects to it.
+Cairn has two parts: a **PostgreSQL database** holding your data, and a
+**desktop application** that connects to it.
 The application ships as a self-contained package — AppImage on Linux, a zip
 on Windows, `.dmg` on macOS — with no Python interpreter and no language
 engine to install:
@@ -50,40 +50,74 @@ it is also bundled inside the AppImage and the dmg.
 
 ## Requirements
 
-- A Docker host (a Debian LXC on Proxmox works well).
+- A machine running PostgreSQL 16 with the TimescaleDB extension (a Debian
+  LXC container works well).
 - A Garmin Connect account.
 - A Strava application — create one at <https://www.strava.com/settings/api>.
 
-## Install
+## Set up the database
+
+On Debian or Ubuntu, using TimescaleDB's official repositories:
 
 ```bash
-git clone https://github.com/devfrp/Cairn.git && cd Cairn
-cp .env.example .env
+sudo apt install -y postgresql-16 postgresql-16-timescaledb
+sudo timescaledb-tune --quiet --yes && sudo systemctl restart postgresql
 ```
 
-Generate the credential encryption key:
+Create the role and the database:
 
 ```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+sudo -u postgres createuser --pwprompt cairn
+sudo -u postgres createdb --owner=cairn cairn
 ```
 
-Put that value in `CAIRN_SECRET_KEY`, then fill in `POSTGRES_PASSWORD`,
-`GRAFANA_PASSWORD` and your Strava credentials. Start it:
+The desktop application takes it from there: its **Settings** page holds the
+connection string, generates the encryption key and installs the schema at
+the press of a button.
+
+## Automatic syncing
+
+The application syncs on demand. For a hands-off nightly pass, install the
+service on the machine hosting the database:
 
 ```bash
-docker compose up -d
+sudo install -d -o cairn -g cairn /opt/cairn /var/lib/cairn
+sudo -u cairn python3 -m venv /opt/cairn/venv
+sudo -u cairn /opt/cairn/venv/bin/pip install 'cairn @ git+https://github.com/devfrp/Cairn'
 ```
 
-Migrations run on first start.
+Create `/etc/cairn/cairn.env` from [.env.example](.env.example) — it holds
+the encryption key, so keep it at `0600`:
+
+```bash
+sudo install -D -m 600 .env.example /etc/cairn/cairn.env
+sudo /opt/cairn/venv/bin/cairn keygen
+```
+
+Put the key in the file, then enable the service:
+
+```bash
+sudo cp packaging/systemd/cairn.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cairn
+```
+
+## Detailed charts
+
+The application shows the essentials. For deeper charts, Grafana plugs
+straight into the database: [grafana/](grafana/) holds the data source and
+the dashboards, ready to copy into `/etc/grafana/provisioning/`.
 
 ## Authentication
+
+The desktop application links both accounts from its **Settings** page. On
+the command line, for the service:
 
 Garmin has no public API for individual use: Cairn opens an SSO session and
 keeps the OAuth token (valid for roughly a year), encrypted at rest. Your
 password is not stored.
 
 ```bash
-docker compose run --rm cairn auth garmin
+cairn auth garmin
 ```
 
 If two-factor authentication is enabled, the code is prompted for here.
@@ -91,34 +125,31 @@ If two-factor authentication is enabled, the code is prompted for here.
 Strava uses a two-step OAuth2 flow:
 
 ```bash
-docker compose run --rm cairn auth strava
+cairn auth strava
 ```
 
 The command prints a URL. Open it, authorise the application, then take the
 `code` parameter from the redirect URL and run:
 
 ```bash
-docker compose run --rm cairn auth strava --code PASTE_CODE_HERE
+cairn auth strava --code PASTE_CODE_HERE
 ```
 
 ## Usage
 
-The nightly pass runs automatically at `CAIRN_SYNC_HOUR`. Until the full
+The service runs at `CAIRN_SYNC_HOUR`. Until the full
 history has been pulled in, it follows the daily sync with a backfill batch.
 
 ```bash
 # cursor state and recent runs
-docker compose run --rm cairn status
+cairn status
 
 # manual pass
-docker compose run --rm cairn sync --source garmin --mode incremental
+cairn sync --source garmin --mode incremental
 
 # on-demand history backfill
-docker compose run --rm cairn sync --mode backfill
+cairn sync --mode backfill
 ```
-
-Grafana listens on port 3000, with the data source and dashboards already
-provisioned.
 
 ## Weekly summary
 
@@ -141,9 +172,9 @@ cannot reason, but they turn established figures into fluent French just
 fine.
 
 ```bash
-docker compose run --rm cairn check-ollama
-docker compose run --rm cairn summary
-docker compose run --rm cairn summary --send
+cairn check-ollama
+cairn summary
+cairn summary --send
 ```
 
 `--no-model` forces the deterministic write-up, handy for comparison. The
@@ -170,7 +201,7 @@ src/cairn/
   gui/             desktop application (Qt): pages, settings, background tasks
   sources/         Garmin (garth) and Strava (OAuth2 + quota) clients
   sync/            mappers, deduplication, upserts, orchestration
-packaging/         PyInstaller recipes, icons
+packaging/         PyInstaller recipes, icons, systemd unit
 grafana/           provisioned data source and dashboards
 ```
 

@@ -124,7 +124,7 @@
     <ul class="status">
       <li><span class="tag tag-ok">Fait</span> <span>Schéma de base, synchronisation Garmin et Strava, déduplication, curseurs de reprise</span></li>
       <li><span class="tag tag-ok">Fait</span> <span>Décodage des fichiers <code>.fit</code>, zones de fréquence cardiaque, charge d'entraînement TRIMP</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Dashboards Grafana provisionnés, déploiement docker-compose</span></li>
+      <li><span class="tag tag-ok">Fait</span> <span>Dashboards Grafana provisionnés, service de synchronisation systemd</span></li>
       <li><span class="tag tag-wip">En cours</span> <span>Charge chronique et aiguë (CTL / ATL / TSB), baselines HRV, détection de surcharge</span></li>
       <li><span class="tag tag-ok">Fait</span> <span>Résumé hebdomadaire rédigé par un modèle local (Ollama), envoi Discord</span></li>
     </ul>
@@ -133,23 +133,22 @@
 
 <section>
   <div class="wrap">
-    <h2>Installer le serveur</h2>
+    <h2>Préparer la base</h2>
     <p>
-      Le serveur est une pile docker-compose : PostgreSQL avec TimescaleDB,
-      le service de synchronisation, et Grafana. Prévu pour tourner dans un
-      conteneur LXC ou une petite VM.
+      Cairn range vos données dans une base PostgreSQL que vous hébergez —
+      un conteneur LXC ou une petite machine suffisent. L'extension
+      TimescaleDB prend en charge les séries seconde par seconde.
     </p>
-<pre><code>git clone https://github.com/devfrp/Cairn.git &amp;&amp; cd Cairn
-cp .env.example .env
-# renseigner les mots de passe et la clé de chiffrement
-docker compose up -d</code></pre>
+<pre><code>sudo apt install -y postgresql-16 postgresql-16-timescaledb
+sudo -u postgres createuser --pwprompt cairn
+sudo -u postgres createdb --owner=cairn cairn</code></pre>
     <p>
-      Puis relier vos comptes. Garmin n'ayant pas d'API publique pour un
-      usage individuel, Cairn ouvre une session et conserve le jeton chiffré
-      en base — votre mot de passe n'est jamais stocké.
+      Le reste se fait dans l'application : sa page Réglages renseigne la
+      connexion, génère la clé de chiffrement, installe le schéma, puis relie
+      Garmin et Strava. Garmin n'ayant pas d'API publique pour un usage
+      individuel, Cairn ouvre une session et conserve le jeton chiffré en
+      base — votre mot de passe n'est jamais stocké.
     </p>
-<pre><code>docker compose run --rm cairn auth garmin
-docker compose run --rm cairn auth strava</code></pre>
   </div>
 </section>
 
@@ -160,7 +159,7 @@ docker compose run --rm cairn auth strava</code></pre>
       Application de bureau autonome : rien à installer, pas d'interpréteur
       Python à prévoir. Elle se connecte à votre propre base et sert à relier
       vos comptes, lancer les synchronisations et lire l'essentiel d'un coup
-      d'œil. Le serveur, lui, reste déployé par docker-compose.
+      d'œil. La base, elle, reste hébergée chez vous.
     </p>
 
     <div class="table-scroll">
