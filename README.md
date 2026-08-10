@@ -2,35 +2,37 @@
 
 *[English version](README.en.md)*
 
-Suivi santé et sport auto-hébergé. Cairn agrège les données Garmin Connect et
-Strava dans un fichier que vous contrôlez entièrement, et croise
-récupération et charge d'entraînement — ce qu'aucun des deux services ne fait,
-puisqu'ils ne se parlent pas.
+Suivi santé et sport, chez vous. Cairn réunit vos données Garmin Connect et
+Strava dans un fichier qui vous appartient, et rapproche récupération et
+charge d'entraînement — ce qu'aucun des deux services ne fait, faute de se
+parler.
 
-Aucune donnée ne sort de votre serveur au-delà des appels d'API nécessaires à
-la synchronisation.
+Rien ne sort de votre machine, hormis les appels nécessaires pour récupérer
+vos propres données.
 
 ## Ce que ça fait
 
-- **Synchronisation quotidienne** des deux sources vers votre base, avec
-  archivage du JSON brut et des fichiers `.fit` originaux.
-- **Déduplication** : une sortie enregistrée sur la montre remonte dans Garmin
-  *et* dans Strava. Cairn les reconnaît comme une seule activité et fusionne
-  les métriques — capteurs côté Garmin, matériel et segments côté Strava.
-- **Croisement récupération × charge** : sommeil, HRV et FC de repos d'une nuit
-  en regard des sorties du jour.
+- **Synchronisation quotidienne** des deux sources, avec conservation des
+  réponses brutes et de vos fichiers `.fit` d'origine.
+- **Plus de doublons** : une sortie enregistrée sur la montre remonte à la
+  fois dans Garmin et dans Strava. Cairn n'en garde qu'une, avec les capteurs
+  du premier et le matériel du second.
+- **Récupération et charge** : sommeil, variabilité cardiaque et fréquence de
+  repos d'une nuit, rapprochés des sorties du jour.
+- **Charge chronique et aiguë**, comparaison à vos propres moyennes,
+  détection de surcharge.
 - **Analyse intégrée** : temps par zone de fréquence cardiaque, volume par
   discipline, charge semaine après semaine.
-- **Résumé hebdomadaire** rédigé par un modèle Ollama qui tourne chez vous,
-  livrable sur Discord.
+- **Résumé hebdomadaire** rédigé par un modèle qui tourne sur votre machine,
+  et qu'on peut faire envoyer sur Discord.
 
 Site du projet : <https://devfrp.github.io/Cairn/>
 
 ## Installer l'application
 
-Cairn est une **application de bureau autonome** : elle transporte sa base de
-données, son moteur de langage et son modèle. Publiée en AppImage sous Linux,
-archive sous Windows et `.dmg` sous macOS, sans rien d'autre à installer :
+Cairn est une **application de bureau autonome** : elle emporte sa base de
+données et son modèle. Publiée en AppImage sous Linux, en archive sous
+Windows et en `.dmg` sous macOS, sans rien d'autre à installer :
 
 ```bash
 curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
@@ -81,12 +83,12 @@ chemin dans `CAIRN_DB_PATH`.
 
 ## Authentification
 
-L'application de bureau relie les deux comptes depuis sa page **Réglages**.
-En ligne de commande, pour le service :
+Le plus simple est de relier les deux comptes depuis la page **Réglages** de
+l'application. Ce qui suit ne concerne que le service en ligne de commande.
 
-Garmin n'a pas d'API publique pour un usage individuel : Cairn ouvre une
-session SSO et conserve le token OAuth (valable environ un an), chiffré en
-base. Le mot de passe n'est pas conservé.
+Garmin n'ouvrant pas son API aux particuliers, Cairn ouvre une session et
+n'en garde que le jeton, chiffré et valable environ un an. Le mot de passe
+n'est jamais conservé.
 
 ```bash
 cairn auth garmin
@@ -110,8 +112,9 @@ cairn auth strava --code COLLER_LE_CODE_ICI
 
 ## Utilisation
 
-Le service tourne à l'heure définie par `CAIRN_SYNC_HOUR`. Tant que l'historique n'est pas entièrement rapatrié, elle
-enchaîne un lot de rattrapage après la synchronisation du jour.
+Le service tourne à l'heure définie par `CAIRN_SYNC_HOUR`. Tant que
+l'historique n'est pas entièrement rapatrié, il enchaîne un lot de rattrapage
+après la synchronisation du jour.
 
 ```bash
 # état des curseurs et des dernières passes
@@ -126,25 +129,23 @@ cairn sync --mode backfill
 
 ## Résumé hebdomadaire
 
-**L'application embarque son propre moteur de langage.** Rien à installer :
-le paquet transporte Ollama et le modèle `qwen3:0.6b`, démarrés à la demande
-sur un port local. Le résumé fonctionne hors ligne, et le texte ne quitte
-jamais la machine. C'est ce qui explique la taille des paquets, de l'ordre de
-800 Mo.
+**L'application emporte son propre modèle.** Rien à installer : Ollama et
+`qwen3:0.6b` voyagent avec elle et démarrent à la demande sur un port local.
+Le résumé fonctionne hors ligne et le texte ne quitte jamais la machine.
+C'est ce qui explique les quelque 800 Mo de chaque version.
 
-Si une adresse Ollama est renseignée dans les réglages, elle est utilisée à
-la place du moteur embarqué — utile pour profiter d'un modèle plus gros
-tournant déjà sur votre serveur.
+Si une adresse Ollama figure dans les réglages, c'est elle qui sert — utile
+pour profiter d'un modèle plus gros qui tourne déjà ailleurs.
 
-Cairn calcule lui-même charges, moyennes, écarts à la ligne de base et
-signaux de fatigue. Le modèle ne fait que **rédiger** ces valeurs : il ne lui
-est jamais demandé de compter. La réponse est ensuite vérifiée — tout nombre
-absent du bilan fait rejeter le texte au profit d'une rédaction déterministe,
-moins fluide mais jamais fausse.
+Cairn calcule lui-même les charges, les moyennes, les écarts à vos habitudes
+et les signaux de fatigue. Le modèle ne fait que **mettre ces valeurs en
+mots** : on ne lui demande jamais de compter. Sa réponse est ensuite
+vérifiée, et tout chiffre absent du bilan la fait écarter au profit d'un
+texte écrit d'avance — moins fluide, mais jamais faux.
 
-C'est ce qui permet d'embarquer un si petit modèle : 0,6 milliard de
-paramètres ne raisonne pas, mais met parfaitement en français des valeurs
-déjà établies.
+C'est ce qui permet d'embarquer un modèle aussi petit : 0,6 milliard de
+paramètres ne raisonne pas, mais rédige très correctement des valeurs déjà
+établies.
 
 ```bash
 cairn check-ollama
@@ -175,7 +176,9 @@ db/migrations/     schéma SQL, appliqué par « cairn db upgrade »
 src/cairn/
   gui/             application de bureau (Qt) : pages, réglages, tâches de fond
   sources/         clients Garmin (garth) et Strava (OAuth2 + quota)
-  sync/            mappers, déduplication, upserts, orchestration
+  sync/            traduction des données, fusion des doublons, orchestration
+  metrics/         charge chronique et aiguë, lignes de base, signaux
+  insights/        résumé hebdomadaire, moteur embarqué, envoi Discord
 packaging/         recettes PyInstaller, icônes, unité systemd
 ```
 

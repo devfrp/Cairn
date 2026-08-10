@@ -2,34 +2,36 @@
 
 *[Version française](README.md)*
 
-Self-hosted health and training tracker. Cairn pulls your Garmin Connect and
-Strava data into a single file you fully control, and cross-references
+Health and training tracking, on your own machine. Cairn brings your Garmin
+Connect and Strava data together in a file that belongs to you, and sets
 recovery against training load — something neither service does, since they
 don't talk to each other.
 
-No data leaves your server beyond the API calls needed to synchronise.
+Nothing leaves your machine beyond the calls needed to fetch your own data.
 
 ## What it does
 
-- **Daily sync** from both sources, archiving the raw JSON and the original
-  `.fit` files.
-- **Deduplication**: a ride recorded on your watch shows up in Garmin *and* in
-  Strava. Cairn recognises them as one activity and merges the metrics —
-  sensors from Garmin, gear and segments from Strava.
-- **Recovery × load**: a night's sleep, HRV and resting heart rate placed
-  alongside the same day's rides.
+- **Daily sync** from both sources, keeping the raw responses and your
+  original `.fit` files.
+- **No more duplicates**: a ride recorded on your watch lands in both Garmin
+  and Strava. Cairn keeps one, with the sensors from the first and the gear
+  from the second.
+- **Recovery and load**: a night's sleep, heart rate variability and resting
+  rate set against the same day's rides.
+- **Chronic and acute load**, compared against your own averages, with
+  overload detection.
 - **Built-in analysis**: time per heart rate zone, volume per discipline,
   load week after week.
-- **Weekly summary** written by an Ollama model running on your own hardware,
-  optionally delivered to Discord.
+- **Weekly summary** written by a model running on your own machine, and
+  optionally sent to Discord.
 
 Project site: <https://devfrp.github.io/Cairn/en/>
 
 ## Install the app
 
-Cairn is a **self-contained desktop application**: it carries its database,
-its language engine and its model. Shipped as an AppImage on Linux, a zip on
-Windows and a `.dmg` on macOS, with nothing else to install:
+Cairn is a **self-contained desktop application**: it carries its database
+and its model. Shipped as an AppImage on Linux, a zip on Windows and a `.dmg`
+on macOS, with nothing else to install:
 
 ```bash
 curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
@@ -80,12 +82,12 @@ same path.
 
 ## Authentication
 
-The desktop application links both accounts from its **Settings** page. On
-the command line, for the service:
+The easiest route is to link both accounts from the application's
+**Settings** page. What follows concerns the command-line service only.
 
-Garmin has no public API for individual use: Cairn opens an SSO session and
-keeps the OAuth token (valid for roughly a year), encrypted at rest. Your
-password is not stored.
+Since Garmin doesn't open its API to individuals, Cairn opens a session and
+keeps only the token, encrypted and valid for about a year. Your password is
+never stored.
 
 ```bash
 cairn auth garmin
@@ -108,8 +110,8 @@ cairn auth strava --code PASTE_CODE_HERE
 
 ## Usage
 
-The service runs at `CAIRN_SYNC_HOUR`. Until the full
-history has been pulled in, it follows the daily sync with a backfill batch.
+The service runs at `CAIRN_SYNC_HOUR`. Until the full history has been
+pulled in, it follows each daily sync with a backfill batch.
 
 ```bash
 # cursor state and recent runs
@@ -124,23 +126,22 @@ cairn sync --mode backfill
 
 ## Weekly summary
 
-**The application ships with its own language engine.** Nothing to install:
-the package carries Ollama and the `qwen3:0.6b` model, started on demand on a
-local port. The summary works offline and the text never leaves your machine.
-That is what makes the packages large, around 800 MB.
+**The application carries its own model.** Nothing to install: Ollama and
+`qwen3:0.6b` travel with it and start on demand on a local port. The summary
+works offline and the text never leaves your machine. That is what makes each
+build around 800 MB.
 
-If an Ollama address is set in the settings, it is used instead of the
-bundled engine — handy for a larger model already running on your server.
+If an Ollama address is set in the settings, that one is used instead — handy
+for a larger model already running elsewhere.
 
-Cairn computes loads, averages, baseline deviations and fatigue signals
-itself. The model only **writes those values up** — it is never asked to
-count. The reply is then checked: any number absent from the briefing gets
-the text rejected in favour of a deterministic write-up, less fluent but
-never wrong.
+Cairn computes the loads, the averages, the deviations from your habits and
+the fatigue signals itself. The model only **puts those values into words**:
+it is never asked to count. Its reply is then checked, and any figure absent
+from the briefing has it discarded in favour of a pre-written text — less
+fluent, but never wrong.
 
 That is what makes such a small model worth bundling: 0.6 billion parameters
-cannot reason, but they turn established figures into fluent French just
-fine.
+cannot reason, but they write up established figures perfectly well.
 
 ```bash
 cairn check-ollama
@@ -171,7 +172,9 @@ db/migrations/     SQL schema, applied by `cairn db upgrade`
 src/cairn/
   gui/             desktop application (Qt): pages, settings, background tasks
   sources/         Garmin (garth) and Strava (OAuth2 + quota) clients
-  sync/            mappers, deduplication, upserts, orchestration
+  sync/            data translation, duplicate merging, orchestration
+  metrics/         chronic and acute load, baselines, signals
+  insights/        weekly summary, bundled engine, Discord delivery
 packaging/         PyInstaller recipes, icons, systemd unit
 ```
 
