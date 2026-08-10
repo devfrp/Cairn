@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -193,30 +194,44 @@ class MainWindow(QMainWindow):
             current.refresh(health)
 
 
+def _emit(line: str) -> None:
+    """Écrit une ligne, même sans console attachée.
+
+    Compilée sans console — le cas sous Windows —, l'application a un
+    `sys.stdout` à None : `print()` n'écrit alors nulle part. On passe par le
+    descripteur de fichier, qui reste valide quand la sortie est redirigée.
+    """
+    try:
+        os.write(1, (line + "\n").encode("utf-8", "replace"))
+    except OSError:
+        print(line)
+
+
 def selftest() -> int:
     """Vérifie ce que contient réellement le paquet, puis sort.
 
-    Appelé par la chaîne de compilation : un paquet qui ne transporte pas son
-    moteur ne doit pas être publié comme s'il en avait un.
+    Appelé par la chaîne de compilation. Le code de sortie distingue deux
+    situations : 1 pour un paquet inutilisable, 2 pour un paquet sans moteur
+    local — amoindri, mais parfaitement publiable.
     """
     from cairn.insights import embedded
     from cairn.migrate import _migrations_dir
 
     migrations = sorted(_migrations_dir().glob("*.sql"))
-    print(f"migrations : {len(migrations)} — {', '.join(p.stem for p in migrations)}")
+    _emit(f"migrations : {len(migrations)} — {', '.join(p.stem for p in migrations)}")
     if not migrations:
         return 1
 
     binary = embedded.binary_path()
     model = embedded.bundled_model()
-    print(f"moteur embarqué : {binary or 'absent'}")
-    print(f"modèle embarqué : {model or 'absent'}")
+    _emit(f"moteur embarqué : {binary or 'absent'}")
+    _emit(f"modèle embarqué : {model or 'absent'}")
 
     if binary is None or model is None:
-        print("→ paquet sans moteur local : le résumé exigera une adresse Ollama.")
+        _emit("→ paquet sans moteur local : le résumé exigera une adresse Ollama.")
         return 2
 
-    print("→ paquet complet.")
+    _emit("→ paquet complet.")
     return 0
 
 

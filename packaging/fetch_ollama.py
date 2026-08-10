@@ -266,13 +266,16 @@ def main() -> int:
         print(f"\nTotal embarqué : {total / 1e6:.0f} Mo")
         return 0
 
-    except Unavailable as exc:
-        # Sans moteur, l'application reste parfaitement utilisable : elle
-        # demandera l'adresse d'une instance Ollama. Mieux vaut publier une
-        # version amoindrie que rien du tout.
-        print(f"\nMoteur non embarqué : {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        # Toute panne compte, pas seulement celles qu'on a prévues : archive
+        # corrompue, disque plein, réseau coupé. Sans moteur, l'application
+        # reste utilisable — elle demandera l'adresse d'une instance Ollama.
+        # Mieux vaut publier une version amoindrie que rien du tout.
+        print(f"\nMoteur non embarqué : {type(exc).__name__} : {exc}", file=sys.stderr)
         shutil.rmtree(VENDOR, ignore_errors=True)
-        return 0 if args.optional else 1
+        if args.optional:
+            return 0
+        raise
 
 
 if __name__ == "__main__":

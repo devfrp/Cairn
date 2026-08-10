@@ -80,11 +80,22 @@ jobs:
         # --optional : une archive introuvable ou un pull en échec produit une
         # application sans moteur local, qui reste utilisable avec une
         # instance Ollama externe. Mieux vaut cela qu'aucune publication.
+        shell: bash
         run: |
           python packaging/fetch_ollama.py \
             --version ${{ env.OLLAMA_VERSION }} \
             --model ${{ env.OLLAMA_MODEL }} \
-            --optional
+            --optional 2>&1 | tee ollama-fetch.log
+          if [ -d packaging/vendor/ollama_models ]; then
+            echo "Moteur embarqué." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Moteur non embarqué sur ${{ matrix.target }}"
+              echo '```'
+              tail -20 ollama-fetch.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Compiler l'application
         run: pyinstaller --clean --noconfirm --distpath dist --workpath build/gui packaging/cairn-gui.spec
@@ -161,8 +172,11 @@ jobs:
           EOF
           chmod +x "$APPDIR/AppRun"
 
+          # AppImageKit est archivé et son asset de la version 13 a été
+          # renommé « obsolete-… » : l'ancienne adresse renvoie un 404, que
+          # curl signale par le code 22.
           curl -fsSL -o appimagetool \
-            https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run \
             "$APPDIR" "artifacts/Cairn-x86_64.AppImage"
@@ -196,7 +210,12 @@ jobs:
           # Un exécutable unique embarquant le moteur et le modèle se
           # redéploierait à chaque lancement : on livre le dossier compressé,
           # que l'on décompresse une fois pour toutes.
-          powershell -Command "Compress-Archive -Path dist/Cairn/* -DestinationPath artifacts/Cairn-windows-x86_64.zip -CompressionLevel Optimal"
+          #
+          # 7z plutôt que Compress-Archive : ce dernier bute sur les chemins
+          # de plus de 260 caractères, que PyInstaller et Qt produisent sans
+          # peine. 7z est préinstallé sur les runners Windows.
+          ( cd dist/Cairn && 7z a -tzip -mx=7 \
+              "$GITHUB_WORKSPACE/artifacts/Cairn-windows-x86_64.zip" . )
           cp dist-cli/cairn.exe "artifacts/cairn-cli-windows-x86_64.exe"
 
       - name: Calculer les empreintes
