@@ -47,6 +47,9 @@ DEFAULT_MODEL = "qwen3:0.6b"
 
 DOWNLOAD = "https://github.com/ollama/ollama/releases/download"
 
+# Adresse du moteur démarré le temps de tirer le modèle.
+HOST = "127.0.0.1:11500"
+
 # Répertoires d'accélérateurs à ne pas embarquer : ils pèsent plus lourd que
 # tout le reste réuni et ne servent pas au modèle visé.
 SKIP_PARTS = ("cuda", "rocm", "hip", "oneapi", "mlx")
@@ -217,53 +220,96 @@ def locate_binary(root: Path) -> Path:
     raise Unavailable(f"Exécutable ollama introuvable sous {root} (contenu : {listing})")
 
 
+def _responding(host: str) -> bool:
+    """Le serveur répond-il ?
+
+    Interrogé en HTTP, et non par `ollama list` : la ligne de commande attend
+    sans broncher un serveur qui n'est pas encore là, si bien que son propre
+    délai d'attente finissait par expirer et faire échouer toute la
+    récupération alors que le moteur allait très bien.
+    """
+    try:
+        with urllib.request.urlopen(f"http://{host}/api/tags", timeout=5) as response:  # noqa: S310
+            return response.status == 200
+    except Exception:  # noqa: BLE001 — serveur pas encore prêt
+        return False
+
+
+def _tail(path: Path, limit: int = 700) -> str:
+    try:
+        return path.read_text("utf-8", errors="replace")[-limit:].strip()
+    except OSError:
+        return ""
+
+
+def _library_env(binary: Path) -> dict[str, str]:
+    """Indique au binaire où trouver ses bibliothèques.
+
+    Elles vivent dans `lib/ollama`, tantôt à côté de l'exécutable, tantôt un
+    cran au-dessus selon la disposition de l'archive.
+    """
+    for base in (binary.parent, binary.parent.parent):
+        lib = base / "lib" / "ollama"
+        if lib.is_dir():
+            key = (
+                "DYLD_LIBRARY_PATH"
+                if platform.system() == "Darwin"
+                else "LD_LIBRARY_PATH"
+            )
+            return {key: f"{lib}{os.pathsep}{os.environ.get(key, '')}"}
+    return {}
+
+
 def pull_model(binary: Path, model: str) -> None:
     """Démarre le moteur téléchargé et lui fait tirer le modèle."""
     MODELS.mkdir(parents=True, exist_ok=True)
     binary.chmod(0o755)
 
     env = os.environ.copy()
-    env["OLLAMA_HOST"] = "127.0.0.1:11500"
+    env["OLLAMA_HOST"] = HOST
     env["OLLAMA_MODELS"] = str(MODELS)
-    # Le binaire cherche ses bibliothèques à côté de lui.
-    lib = binary.parent.parent / "lib"
-    if lib.is_dir():
-        env["LD_LIBRARY_PATH"] = f"{lib / 'ollama'}:{env.get('LD_LIBRARY_PATH', '')}"
+    env.update(_library_env(binary))
 
     print(f"Démarrage du moteur pour tirer {model}")
-    server = subprocess.Popen(
-        [str(binary), "serve"], env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline:
-            if server.poll() is not None:
-                detail = ""
-                if server.stderr is not None:
-                    detail = server.stderr.read().decode("utf-8", "replace")[-500:]
-                raise Unavailable(f"Le moteur s'est arrêté au démarrage. {detail}")
-            probe = subprocess.run(
-                [str(binary), "list"], env=env, capture_output=True,
-                timeout=20, check=False,
-            )
-            if probe.returncode == 0:
-                break
-            time.sleep(2)
-        else:
-            raise Unavailable("Le moteur n'a pas démarré dans le délai imparti.")
-
-        result = subprocess.run(
-            [str(binary), "pull", model], env=env, check=False, timeout=1800
+    # Journal dans un fichier plutôt que dans un tuyau : `ollama serve` est
+    # bavard au démarrage, et un tuyau que personne ne vide finit par se
+    # remplir — le serveur se bloque alors sur son écriture et cesse de
+    # répondre, sans jamais s'arrêter pour autant.
+    log = VENDOR / "ollama-serve.log"
+    with log.open("wb") as sink:
+        server = subprocess.Popen(
+            [str(binary), "serve"], env=env, stdout=sink, stderr=subprocess.STDOUT,
         )
-        if result.returncode != 0:
-            raise Unavailable(f"Échec du téléchargement de {model}")
-    finally:
-        server.terminate()
         try:
-            server.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            server.kill()
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                if server.poll() is not None:
+                    raise Unavailable(
+                        f"Le moteur s'est arrêté au démarrage. {_tail(log)}"
+                    )
+                if _responding(HOST):
+                    break
+                time.sleep(2)
+            else:
+                raise Unavailable(
+                    f"Le moteur n'a pas répondu en deux minutes. {_tail(log)}"
+                )
+
+            result = subprocess.run(
+                [str(binary), "pull", model], env=env, check=False, timeout=1800
+            )
+            if result.returncode != 0:
+                raise Unavailable(
+                    f"Échec du téléchargement de {model}. {_tail(log)}"
+                )
+        finally:
+            server.terminate()
+            try:
+                server.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                server.kill()
+
+    log.unlink(missing_ok=True)
 
     size = sum(f.stat().st_size for f in MODELS.rglob("*") if f.is_file())
     print(f"  modèle embarqué : {size / 1e6:.0f} Mo")

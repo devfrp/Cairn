@@ -47,9 +47,13 @@ jobs:
             target: linux-x86_64
           - os: windows-latest
             target: windows-x86_64
-          - os: macos-13
+          # macOS 13 a été retiré du parc : le label ne correspondant plus à
+          # aucune machine, le job restait en attente indéfiniment et retenait
+          # la publication, qui attend toute la matrice. macOS 14 est déprécié
+          # dans la foulée.
+          - os: macos-15-intel
             target: macos-x86_64
-          - os: macos-14
+          - os: macos-15
             target: macos-arm64
 
     runs-on: ${{ matrix.os }}
