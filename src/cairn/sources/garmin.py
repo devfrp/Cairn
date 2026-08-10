@@ -9,6 +9,20 @@ Les chemins d'API ci-dessous sont ceux du site Garmin Connect. Ils ne sont
 couverts par aucun contrat : Garmin peut les déplacer sans préavis. C'est
 pourquoi chaque ressource est appelée indépendamment et qu'un échec isolé
 dégrade la passe en `partial` au lieu de la faire échouer entièrement.
+
+Deux choses à savoir avant de toucher à ce fichier :
+
+* `garth` n'est plus maintenu depuis le 27 mars 2026. Son auteur l'a
+  abandonné parce que Garmin a changé son flux d'authentification ; la
+  bibliothèque reste en place tant qu'elle rend service, mais personne ne la
+  corrigera en amont ;
+* ce changement consiste à filtrer les clients HTTP sur leur signature TLS.
+  Envoyer identifiant et mot de passe depuis Python se solde donc par un 429
+  avant même que Garmin les regarde. C'est pourquoi la connexion passe par une
+  fenêtre de navigateur — voir `signin_url()` et `login_with_ticket()` — et
+  non plus par `login_interactive()`. Seuls l'échange du ticket et les appels
+  de données restent en HTTP ordinaire : ces points d'entrée-là ne sont pas
+  filtrés (mesuré : 400 pour un client nu comme pour une empreinte Chrome).
 """
 
 from __future__ import annotations
@@ -21,6 +35,7 @@ from typing import Any
 
 import garth
 import structlog
+from garth import sso
 from garth.exc import GarthHTTPError
 
 from cairn.secrets import load_credential, save_credential
@@ -30,12 +45,60 @@ log = structlog.get_logger(__name__)
 CREDENTIAL_SOURCE = "garmin"
 
 
-class GarminAuthRequired(RuntimeError):
+class GarminError(RuntimeError):
+    """Erreur dont le message est écrit pour l'utilisateur, pas pour un journal."""
+
+
+class GarminAuthRequired(GarminError):
     """Aucun token utilisable : il faut relancer `cairn auth garmin`."""
+
+
+class GarminRateLimited(GarminError):
+    """Garmin a répondu 429 : il faut attendre, surtout pas réessayer."""
 
 
 class GarminEndpointGone(RuntimeError):
     """Un endpoint a répondu 404/410 — il a probablement changé côté Garmin."""
+
+
+# Adresse de connexion chargée dans la fenêtre intégrée, et service auquel le
+# ticket sera rattaché. Ce dernier n'est pas une page : Garmin y redirige avec
+# le ticket en paramètre, ce qui suffit à l'intercepter.
+SERVICE_URL = "https://mobile.integration.{domain}/gcm/android"
+SIGNIN_URL = "https://sso.{domain}/sso/signin"
+
+# Le 429 de Garmin ne veut pas dire « trop de requêtes » : il tombe dès la
+# première tentative. Le message doit écarter la fausse piste de l'attente.
+RATE_LIMITED = (
+    "Garmin a refusé la requête (erreur 429). Ses serveurs écartent les "
+    "clients qui ne ressemblent pas à un navigateur, sans regarder ce qui est "
+    "demandé. Rien n'a été enregistré, et réessayer tout de suite n'y "
+    "changera rien."
+)
+
+
+def _status_code(exc: GarthHTTPError) -> int | None:
+    response = getattr(getattr(exc, "error", None), "response", None)
+    return getattr(response, "status_code", None)
+
+
+def signin_url(domain: str = "garmin.com") -> str:
+    """Adresse à charger dans la fenêtre de connexion.
+
+    Une fois l'identification faite — mot de passe, double authentification,
+    éventuel captcha —, Garmin redirige vers `service` en y ajoutant un
+    paramètre `ticket`. C'est ce ticket, et lui seul, que Cairn récupère.
+    """
+    from urllib.parse import urlencode
+
+    params = urlencode(
+        {
+            "service": SERVICE_URL.format(domain=domain),
+            "clientId": "GCM_ANDROID_DARK",
+            "gauthHost": SIGNIN_URL.format(domain=domain),
+        }
+    )
+    return f"{SIGNIN_URL.format(domain=domain)}?{params}"
 
 
 class GarminClient:
@@ -46,6 +109,7 @@ class GarminClient:
         # par défaut mais activable par les variables d'environnement
         # GARTH_TELEMETRY_*. On la coupe explicitement : rien de ce qui
         # transite ici ne doit pouvoir partir vers un tiers.
+        self.domain = domain
         self._client = garth.Client(
             domain=domain,
             telemetry_enabled=False,
@@ -62,7 +126,12 @@ class GarminClient:
         password: str,
         prompt_mfa: Callable[[], str] | None = None,
     ) -> None:
-        """Login SSO complet, puis persistance du token chiffré en base.
+        """Login SSO par mot de passe. Conservé, mais Garmin le refuse.
+
+        Depuis mars 2026 ce chemin se solde par un 429 : le mot de passe n'est
+        même pas examiné. Il reste en place pour les comptes hébergés sur un
+        domaine qui ne filtre pas, et parce que le jour où Garmin desserre,
+        rien n'est à réécrire. Préférer `login_with_ticket()`.
 
         `prompt_mfa` n'est appelé que si le compte a la double authentification
         activée. En contexte non interactif, passer une callable qui lève.
@@ -70,7 +139,36 @@ class GarminClient:
         kwargs: dict[str, Any] = {}
         if prompt_mfa is not None:
             kwargs["prompt_mfa"] = prompt_mfa
-        self._client.login(email, password, **kwargs)
+        try:
+            self._client.login(email, password, **kwargs)
+        except GarthHTTPError as exc:
+            if _status_code(exc) == 429:
+                raise GarminRateLimited(RATE_LIMITED) from exc
+            raise
+        self._persist_token()
+        log.info("garmin: authentification réussie", user=self.display_name)
+
+    def login_with_ticket(self, ticket: str) -> None:
+        """Termine la connexion à partir du ticket délivré au navigateur.
+
+        Garmin remet un « service ticket » à usage unique une fois
+        l'identification faite. Il suffit à obtenir les jetons OAuth : ni le
+        mot de passe ni le code de double authentification ne transitent par
+        Cairn, qui ne les voit jamais.
+        """
+        try:
+            oauth1 = sso.get_oauth1_token(ticket, self._client)
+            self._client.oauth1_token = oauth1
+            self._client.oauth2_token = sso.exchange(oauth1, self._client, login=True)
+        except GarthHTTPError as exc:
+            if _status_code(exc) == 429:
+                raise GarminRateLimited(RATE_LIMITED) from exc
+            raise GarminAuthRequired(
+                "Garmin a refusé le ticket de connexion. Il n'est valable que "
+                "quelques secondes et ne sert qu'une fois : relancez la "
+                f"connexion. ({exc})"
+            ) from exc
+
         self._persist_token()
         log.info("garmin: authentification réussie", user=self.display_name)
 
@@ -92,6 +190,10 @@ class GarminClient:
         try:
             self._client.refresh_oauth2()
         except GarthHTTPError as exc:
+            # Un 429 n'est pas un jeton mort : l'annoncer comme tel enverrait
+            # se reconnecter, donc réessayer, donc prolonger le blocage.
+            if _status_code(exc) == 429:
+                raise GarminRateLimited(RATE_LIMITED) from exc
             raise GarminAuthRequired(
                 f"Token Garmin expiré ou révoqué ({exc}). Relancer : cairn auth garmin"
             ) from exc
@@ -121,9 +223,7 @@ class GarminClient:
         try:
             return self._client.connectapi(path, params=params or None)
         except GarthHTTPError as exc:
-            status = getattr(getattr(exc, "error", None), "response", None)
-            code = getattr(status, "status_code", None)
-            if code in (404, 410):
+            if _status_code(exc) in (404, 410):
                 # Deux cas indiscernables ici : pas de donnée pour cette date,
                 # ou endpoint déplacé. L'appelant tranche selon la ressource.
                 log.debug("garmin: 404", path=path, params=params)

@@ -85,20 +85,35 @@ def db_check() -> None:
 def auth_garmin() -> None:
     """Ouvre une session Garmin et enregistre le token chiffré en base.
 
-    À relancer environ une fois par an, quand le token OAuth1 expire.
+    Garmin refuse depuis mars 2026 les connexions par mot de passe venant d'un
+    programme : sur un compte ordinaire, cette commande échoue quoi qu'on
+    fasse. Passer par la fenêtre de connexion de l'application, qui écrit le
+    jeton dans le même fichier de données. La commande reste utile pour les
+    domaines qui ne filtrent pas.
     """
-    from cairn.sources.garmin import GarminClient
+    from cairn.sources.garmin import GarminClient, GarminRateLimited
 
     settings = get_settings()
     email = settings.garmin_email or typer.prompt("Email Garmin")
     password = settings.garmin_password or typer.prompt("Mot de passe Garmin", hide_input=True)
 
     client = GarminClient(domain=settings.garmin_domain)
-    client.login_interactive(
-        email,
-        password,
-        prompt_mfa=lambda: typer.prompt("Code de double authentification"),
-    )
+    try:
+        client.login_interactive(
+            email,
+            password,
+            prompt_mfa=lambda: typer.prompt("Code de double authentification"),
+        )
+    except GarminRateLimited as exc:
+        typer.echo(f"{exc}", err=True)
+        typer.echo(
+            "\nOuvrez l'application Cairn, page « Réglages », bouton « Se "
+            "connecter à Garmin » : la connexion s'y fait dans une fenêtre de "
+            "navigateur, et le jeton obtenu vaut aussi pour cette commande.",
+            err=True,
+        )
+        raise typer.Exit(2) from exc
+
     typer.echo(f"Session Garmin enregistrée pour {client.display_name}.")
 
 

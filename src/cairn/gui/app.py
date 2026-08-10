@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -207,6 +207,62 @@ def _emit(line: str) -> None:
         print(line)
 
 
+_KEEP_ALIVE: list[object] = []
+
+
+def check_webengine() -> str | None:
+    """Affiche une page dans le moteur de rendu. Retourne l'erreur, ou None.
+
+    La fenêtre de connexion Garmin est la seule façon de relier un compte
+    depuis mars 2026. Or un moteur de rendu amputé — une bibliothèque Qt
+    écartée de trop, un fichier de ressources oublié — se compile sans la
+    moindre erreur et ne se manifeste qu'à l'usage, par une fenêtre blanche.
+
+    La page est écrite en dur, sans accès au réseau : on vérifie le moteur,
+    pas la disponibilité de Garmin.
+    """
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Les machines de compilation n'ont pas de carte graphique.
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+
+    try:
+        from cairn.gui.garmin_login import prepare_webengine
+
+        prepare_webengine()
+
+        from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+    except Exception as exc:  # noqa: BLE001 — paquet incomplet
+        return f"{type(exc).__name__} : {exc}"
+
+    app = QApplication.instance() or QApplication([])
+    profile = QWebEngineProfile()
+    page = QWebEnginePage(profile, profile)
+
+    outcome: dict[str, bool] = {}
+
+    def finished(ok: bool) -> None:
+        outcome["ok"] = ok
+        QTimer.singleShot(0, app.quit)
+
+    page.loadFinished.connect(finished)
+    page.setHtml("<title>cairn</title><p>moteur de rendu opérationnel</p>")
+    QTimer.singleShot(60_000, app.quit)
+    app.exec()
+
+    # Qt exige que le profil survive à sa page, et se plaint bruyamment
+    # sinon — un avertissement qui parle de « troubles » à venir et qui n'a
+    # aucune raison de figurer dans les journaux de compilation. La boucle
+    # étant arrêtée, `deleteLater()` ne suffit pas : les destructions
+    # différées doivent être réclamées explicitement.
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _KEEP_ALIVE.append(profile)
+
+    if not outcome.get("ok"):
+        return "aucune page affichée en soixante secondes"
+    return None
+
+
 def selftest() -> int:
     """Vérifie ce que contient réellement le paquet, puis sort.
 
@@ -227,6 +283,14 @@ def selftest() -> int:
     _emit(f"moteur embarqué : {binary or 'absent'}")
     _emit(f"modèle embarqué : {model or 'absent'}")
 
+    # Sans moteur de rendu, aucun compte Garmin ne peut être relié : c'est un
+    # paquet cassé, pas un paquet amoindri.
+    failure = check_webengine()
+    _emit(f"moteur de rendu : {failure or 'opérationnel'}")
+    if failure:
+        _emit("→ la fenêtre de connexion Garmin resterait blanche.")
+        return 1
+
     if binary is None or model is None:
         _emit("→ paquet sans moteur local : le résumé exigera une adresse Ollama.")
         return 2
@@ -240,6 +304,12 @@ def main() -> int:
 
     if "--selftest" in sys.argv:
         return selftest()
+
+    # Avant QApplication, impérativement : le moteur de rendu de la fenêtre de
+    # connexion Garmin exige des réglages posés à ce moment-là.
+    from cairn.gui.garmin_login import prepare_webengine
+
+    prepare_webengine()
 
     app = QApplication(sys.argv)
     app.setApplicationName("Cairn")

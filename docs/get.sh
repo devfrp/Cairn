@@ -4,8 +4,9 @@
 #   curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh
 #
 # Télécharge l'application de bureau de la dernière version publiée, vérifie
-# son empreinte SHA-256 et l'installe. La base de données s'installe
-# séparément, sur la machine qui héberge vos données.
+# son empreinte SHA-256 et l'installe. Il n'y a rien d'autre à installer :
+# l'application emporte sa base de données, son moteur de langage et son
+# modèle.
 
 set -eu
 
@@ -152,8 +153,8 @@ esac
 info ""
 info "Cairn installé : $installed"
 info ""
-info "Au premier démarrage, ouvrez « Réglages » pour indiquer l'adresse de"
-info "votre base, installer le schéma, puis relier Garmin et Strava."
+info "Au premier démarrage, ouvrez « Réglages » pour choisir où ranger votre"
+info "fichier de données, puis relier Garmin et Strava."
 info ""
 info "Documentation et code source :"
 info "    https://github.com/$REPO"

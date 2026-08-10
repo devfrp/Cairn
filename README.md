@@ -83,21 +83,31 @@ chemin dans `CAIRN_DB_PATH`.
 
 ## Authentification
 
-Le plus simple est de relier les deux comptes depuis la page **Réglages** de
-l'application. Ce qui suit ne concerne que le service en ligne de commande.
+Les deux comptes se relient depuis la page **Réglages** de l'application.
 
-Garmin n'ouvrant pas son API aux particuliers, Cairn ouvre une session et
-n'en garde que le jeton, chiffré et valable environ un an. Le mot de passe
-n'est jamais conservé.
+### Garmin
 
-```bash
-cairn auth garmin
-```
+Depuis mars 2026, Garmin refuse les connexions qui ne viennent pas d'un
+navigateur : il examine la signature de la couche chiffrée et écarte les
+clients logiciels avant même de regarder les identifiants. C'est aussi ce qui
+a mis fin à `garth`, la bibliothèque sur laquelle Cairn s'appuie.
 
-Si la double authentification est active sur le compte, le code est demandé à
-ce moment-là.
+Cairn ouvre donc **la page de connexion de Garmin dans une fenêtre**. Le mot
+de passe et l'éventuel code de double authentification vont directement à
+Garmin ; ils ne traversent pas le code de Cairn, qui n'en récupère qu'un
+jeton, chiffré dans votre fichier de données et valable environ un an.
 
-Pour Strava, le flux OAuth2 se fait en deux temps :
+C'est ce qui explique qu'un moteur de rendu web soit embarqué, et une bonne
+part de la taille des paquets. Il ne sert qu'à cette page.
+
+`cairn auth garmin` existe toujours pour les comptes hébergés sur un domaine
+qui ne filtre pas, mais échoue sur un compte ordinaire. Le service en ligne de
+commande partage le fichier de données de l'application : le jeton obtenu dans
+la fenêtre lui sert directement.
+
+### Strava
+
+Le flux OAuth2 se fait en deux temps :
 
 ```bash
 cairn auth strava
@@ -132,7 +142,11 @@ cairn sync --mode backfill
 **L'application emporte son propre modèle.** Rien à installer : Ollama et
 `qwen3:0.6b` voyagent avec elle et démarrent à la demande sur un port local.
 Le résumé fonctionne hors ligne et le texte ne quitte jamais la machine.
-C'est ce qui explique les quelque 800 Mo de chaque version.
+
+C'est, avec le moteur de rendu de la fenêtre de connexion Garmin, ce qui
+explique le poids de chaque version — un peu plus d'un gigaoctet. Deux
+composants encombrants pour deux fonctions qui, autrement, obligeraient à
+installer autre chose à côté.
 
 Si une adresse Ollama figure dans les réglages, c'est elle qui sert — utile
 pour profiter d'un modèle plus gros qui tourne déjà ailleurs.

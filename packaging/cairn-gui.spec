@@ -46,19 +46,21 @@ for source, target in (
 binaries = []
 hiddenimports = collect_submodules("cairn")
 
+# Modules Qt réellement inutilisés. La liste s'est raccourcie avec la fenêtre
+# de connexion Garmin : `QWebEngineView` est bâti sur QtQuick, et écarter l'un
+# de ces modules donne une fenêtre blanche à l'exécution — jamais une erreur à
+# la compilation. Ne rien y remettre sans avoir relancé la connexion Garmin
+# depuis le paquet compilé.
 QT_UNUSED = [
     "PySide6.Qt3DAnimation", "PySide6.Qt3DCore", "PySide6.Qt3DExtras",
     "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DRender",
     "PySide6.QtBluetooth", "PySide6.QtCharts", "PySide6.QtDataVisualization",
     "PySide6.QtHelp", "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
-    "PySide6.QtNfc", "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets",
-    "PySide6.QtPositioning", "PySide6.QtQml", "PySide6.QtQuick",
-    "PySide6.QtQuick3D", "PySide6.QtQuickControls2", "PySide6.QtQuickWidgets",
+    "PySide6.QtNfc", "PySide6.QtQuick3D", "PySide6.QtQuickControls2",
     "PySide6.QtRemoteObjects", "PySide6.QtScxml", "PySide6.QtSensors",
     "PySide6.QtSerialPort", "PySide6.QtSpatialAudio", "PySide6.QtSql",
     "PySide6.QtStateMachine", "PySide6.QtTest", "PySide6.QtTextToSpeech",
-    "PySide6.QtWebChannel", "PySide6.QtWebEngineCore",
-    "PySide6.QtWebEngineWidgets", "PySide6.QtWebSockets",
+    "PySide6.QtWebSockets",
 ]
 
 icon = None
@@ -133,7 +135,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Cairn",
             "CFBundleDisplayName": "Cairn",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleShortVersionString": "0.1.1",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
         },

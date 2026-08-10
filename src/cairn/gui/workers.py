@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -63,51 +62,43 @@ class Worker(QThread):
 
 
 class GarminLoginWorker(QThread):
-    """Connexion Garmin, avec demande de code à double authentification.
+    """Échange le ticket de connexion Garmin contre des jetons durables.
 
-    Le code ne peut être saisi que dans le fil d'affichage. Le worker émet
-    `mfa_required`, se met en attente, et l'interface le réveille avec
-    `provide_mfa()`.
+    L'identification elle-même a lieu dans la fenêtre de navigateur : ni le
+    mot de passe ni le code de double authentification n'arrivent jusqu'ici.
+    Ne reste que le ticket, valable quelques secondes, dont l'échange est un
+    appel réseau — donc à faire hors du fil d'affichage.
     """
 
     succeeded = Signal(object)
     failed = Signal(str)
-    mfa_required = Signal()
+    # Distinct de `failed` : rien n'est cassé, il faut seulement attendre.
+    rate_limited = Signal(str)
     done = Signal()
 
-    def __init__(self, email: str, password: str, domain: str,
+    def __init__(self, ticket: str, domain: str,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._email = email
-        self._password = password
+        self._ticket = ticket
         self._domain = domain
-        self._mfa_code: str | None = None
-        self._mfa_ready = threading.Event()
-
-    def provide_mfa(self, code: str | None) -> None:
-        """Appelé depuis l'interface : None signifie annulation."""
-        self._mfa_code = code
-        self._mfa_ready.set()
-
-    def _prompt_mfa(self) -> str:
-        self._mfa_ready.clear()
-        self.mfa_required.emit()
-        # Sans limite de temps, un worker resterait bloqué si la fenêtre est
-        # fermée pendant la saisie.
-        if not self._mfa_ready.wait(timeout=300):
-            raise TimeoutError("Aucun code de double authentification fourni.")
-        if not self._mfa_code:
-            raise RuntimeError("Connexion annulée.")
-        return self._mfa_code
 
     def run(self) -> None:
-        from cairn.sources.garmin import GarminClient
+        from cairn.sources.garmin import (
+            GarminClient,
+            GarminError,
+            GarminRateLimited,
+        )
 
         try:
             client = GarminClient(domain=self._domain)
-            client.login_interactive(self._email, self._password,
-                                     prompt_mfa=self._prompt_mfa)
+            client.login_with_ticket(self._ticket)
             name = client.display_name
+        except GarminRateLimited as exc:
+            self.rate_limited.emit(str(exc))
+        except GarminError as exc:
+            # Message déjà écrit pour l'utilisateur : le préfixer du nom de la
+            # classe ne ferait que le rendre inquiétant.
+            self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001 — remonté à l'interface
             self.failed.emit(f"{type(exc).__name__} : {exc}")
         else:

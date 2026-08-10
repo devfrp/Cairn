@@ -11,13 +11,15 @@ une seule commande dans le Terminal :
 
 Ouvrez ensuite Cairn normalement.
 
-Au premier démarrage, allez dans « Réglages » : renseignez l'adresse de
-votre base PostgreSQL, générez une clé de chiffrement, installez le schéma,
-puis reliez vos comptes Garmin et Strava.
+Il n'y a rien d'autre à installer : Cairn emporte sa base de données, son
+moteur de langage et son modèle. C'est ce qui explique sa taille.
 
-Le serveur lui-même (PostgreSQL avec TimescaleDB, et Grafana pour les
-graphiques détaillés) s'installe séparément sur la machine qui héberge vos
-données. Voir la documentation du projet.
+Au premier démarrage, allez dans « Réglages » : choisissez où ranger votre
+fichier de données, puis reliez vos comptes Garmin et Strava. La clé qui
+chiffre vos jetons et le schéma de la base sont mis en place pour vous.
+
+Ce fichier contient toutes vos données. Le sauvegarder, c'est sauvegarder
+Cairn ; le copier sur une autre machine, c'est déménager.
 
 Ligne de commande
 -----------------

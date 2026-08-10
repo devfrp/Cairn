@@ -82,18 +82,28 @@ same path.
 
 ## Authentication
 
-The easiest route is to link both accounts from the application's
-**Settings** page. What follows concerns the command-line service only.
+Both accounts are linked from the application's **Settings** page.
 
-Since Garmin doesn't open its API to individuals, Cairn opens a session and
-keeps only the token, encrypted and valid for about a year. Your password is
-never stored.
+### Garmin
 
-```bash
-cairn auth garmin
-```
+Since March 2026, Garmin turns away connections that don't come from a
+browser: it inspects the signature of the encrypted layer and rejects software
+clients before even looking at credentials. That is also what ended `garth`,
+the library Cairn builds on.
 
-If two-factor authentication is enabled, the code is prompted for here.
+So Cairn opens **Garmin's own sign-in page in a window**. Your password, and
+your two-factor code if you use one, go straight to Garmin; they never pass
+through Cairn's code, which comes away with nothing but a token — encrypted in
+your data file and valid for about a year.
+
+That is why a web rendering engine ships with the application, and a good part
+of why the packages are large. It serves that one page.
+
+`cairn auth garmin` still exists for accounts on a domain that doesn't filter,
+but fails on an ordinary account. The command-line service shares the
+application's data file, so the token obtained in the window works for it too.
+
+### Strava
 
 Strava uses a two-step OAuth2 flow:
 
@@ -128,8 +138,12 @@ cairn sync --mode backfill
 
 **The application carries its own model.** Nothing to install: Ollama and
 `qwen3:0.6b` travel with it and start on demand on a local port. The summary
-works offline and the text never leaves your machine. That is what makes each
-build around 800 MB.
+works offline and the text never leaves your machine.
+
+That, together with the rendering engine behind the Garmin sign-in window, is
+what makes each build weigh a little over a gigabyte — two bulky components
+for two features that would otherwise mean installing something else
+alongside.
 
 If an Ollama address is set in the settings, that one is used instead — handy
 for a larger model already running elsewhere.

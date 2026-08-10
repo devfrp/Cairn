@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QDesktopServices
+import os
+
+from PySide6.QtCore import QProcess, QProcessEnvironment, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -19,6 +23,101 @@ from PySide6.QtWidgets import (
 from cairn.gui import prefs, queries, theme
 from cairn.gui.widgets import Card, SectionHeader, StatusPill, field_row
 from cairn.gui.workers import GarminLoginWorker, Worker
+
+
+def launch_browser(url: str) -> bool:
+    """Ouvre le navigateur du système sur `url`.
+
+    Depuis une AppImage, le processus fils hérite des bibliothèques embarquées
+    et le navigateur meurt aussitôt, sans que rien ne le signale. PyInstaller
+    conserve les valeurs d'origine dans des variables suffixées `_ORIG` : on
+    les restaure avant de lancer quoi que ce soit.
+    """
+    if os.environ.get("APPDIR"):
+        env = QProcessEnvironment.systemEnvironment()
+        for key in ("LD_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH", "QT_PLUGIN_PATH"):
+            original = os.environ.get(f"{key}_ORIG")
+            if original:
+                env.insert(key, original)
+            else:
+                env.remove(key)
+        process = QProcess()
+        process.setProcessEnvironment(env)
+        process.setProgram("xdg-open")
+        process.setArguments([url])
+        started, _pid = process.startDetached()
+        if started:
+            return True
+
+    return QDesktopServices.openUrl(QUrl(url))
+
+
+class AuthorizeDialog(QDialog):
+    """Affiche l'adresse d'autorisation, que le navigateur s'ouvre ou non.
+
+    Se contenter d'appeler le navigateur laissait l'utilisateur devant une
+    fenêtre inerte quand le lancement échouait : rien ne s'ouvrait et rien ne
+    le disait. L'adresse est donc toujours à l'écran, sélectionnable.
+    """
+
+    def __init__(self, url: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._url = url
+        self.setWindowTitle("Autoriser Cairn sur Strava")
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "Ouvrez cette adresse, autorisez Cairn, puis revenez ici : la page "
+            "d'arrivée affichera une erreur, c'est normal. C'est son adresse "
+            "qui compte, elle contient le paramètre « code »."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.field = QLineEdit(url)
+        self.field.setReadOnly(True)
+        self.field.setCursorPosition(0)
+        layout.addWidget(self.field)
+
+        self.status = QLabel("")
+        self.status.setObjectName("SidebarSubtitle")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        buttons = QDialogButtonBox()
+        open_button = buttons.addButton(
+            "Ouvrir le navigateur", QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        copy_button = buttons.addButton(
+            "Copier l'adresse", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        buttons.addButton("Fermer", QDialogButtonBox.ButtonRole.RejectRole)
+
+        open_button.clicked.connect(self._open)
+        copy_button.clicked.connect(self._copy)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        # Tentative immédiate : dans le cas courant le navigateur s'ouvre et
+        # cette fenêtre n'est plus qu'un filet de sécurité.
+        self._open()
+
+    def _open(self) -> None:
+        if launch_browser(self._url):
+            self.status.setText("Navigateur lancé.")
+        else:
+            self.status.setText(
+                "Le navigateur n'a pas pu être lancé. Copiez l'adresse "
+                "ci-dessus et ouvrez-la vous-même."
+            )
+
+    def _copy(self) -> None:
+        QGuiApplication.clipboard().setText(self._url)
+        self.field.selectAll()
+        self.status.setText("Adresse copiée.")
 
 
 class SettingsPage(QWidget):
@@ -116,22 +215,16 @@ class SettingsPage(QWidget):
         card.layout().addLayout(header)
 
         hint = QLabel(
-            "Garmin n'expose pas d'API publique : Cairn ouvre une session et "
-            "conserve le jeton chiffré en base. Le mot de passe n'est pas "
-            "enregistré et sert uniquement à cette connexion, à renouveler "
-            "environ une fois par an."
+            "Garmin n'expose pas d'API publique et refuse depuis mars 2026 "
+            "les connexions qui ne viennent pas d'un navigateur. Cairn ouvre "
+            "donc la page de connexion de Garmin dans une fenêtre : votre mot "
+            "de passe va directement à Garmin, Cairn ne le voit pas. Il n'en "
+            "récupère qu'un jeton, chiffré dans votre fichier de données, "
+            "à renouveler environ une fois par an."
         )
         hint.setObjectName("CardHint")
         hint.setWordWrap(True)
         card.layout().addWidget(hint)
-
-        self.garmin_email = QLineEdit()
-        self.garmin_email.setPlaceholderText("adresse du compte Garmin Connect")
-        card.layout().addWidget(field_row("Adresse électronique", self.garmin_email))
-
-        self.garmin_password = QLineEdit()
-        self.garmin_password.setEchoMode(QLineEdit.EchoMode.Password)
-        card.layout().addWidget(field_row("Mot de passe", self.garmin_password))
 
         buttons = QHBoxLayout()
         self.btn_garmin = QPushButton("Se connecter à Garmin")
@@ -356,7 +449,6 @@ class SettingsPage(QWidget):
         values = prefs.load()
         self.dsn.setText(values.get("db_path", ""))
         self.secret.setText(values.get("secret_key", ""))
-        self.garmin_email.setText(values.get("garmin_email", ""))
         self.strava_id.setText(values.get("strava_client_id", ""))
         self.strava_secret.setText(values.get("strava_client_secret", ""))
         self.ollama_url.setText(values.get("ollama_url", ""))
@@ -370,7 +462,6 @@ class SettingsPage(QWidget):
             {
                 "db_path": self.dsn.text().strip(),
                 "secret_key": self.secret.text().strip(),
-                "garmin_email": self.garmin_email.text().strip(),
                 "strava_client_id": self.strava_id.text().strip(),
                 "strava_client_secret": self.strava_secret.text().strip(),
                 "ollama_url": self.ollama_url.text().strip(),
@@ -440,13 +531,6 @@ class SettingsPage(QWidget):
         if self._worker is not None:
             return
 
-        email = self.garmin_email.text().strip()
-        password = self.garmin_password.text()
-        if not email or not password:
-            QMessageBox.warning(self, "Champs manquants",
-                                "Renseignez l'adresse et le mot de passe Garmin.")
-            return
-
         self.save_values()
         health = queries.probe()
         if not health.usable:
@@ -458,32 +542,38 @@ class SettingsPage(QWidget):
             return
 
         from cairn.config import get_settings
+        from cairn.gui.garmin_login import GarminLoginDialog
 
-        worker = GarminLoginWorker(email, password, get_settings().garmin_domain, self)
+        domain = get_settings().garmin_domain
+        dialog = GarminLoginDialog(domain, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.ticket:
+            return
+
+        # Le ticket ne vaut que quelques secondes : l'échange part aussitôt,
+        # dans un fil séparé pour ne pas figer la fenêtre.
+        worker = GarminLoginWorker(dialog.ticket, domain, self)
         self._worker = worker
         self.btn_garmin.setEnabled(False)
-        worker.mfa_required.connect(lambda: self._ask_mfa(worker))
         worker.succeeded.connect(self._garmin_ok)
         worker.failed.connect(self._garmin_failed)
+        worker.rate_limited.connect(self._garmin_rate_limited)
         worker.done.connect(self._worker_done)
         worker.start()
 
-    def _ask_mfa(self, worker: GarminLoginWorker) -> None:
-        code, accepted = QInputDialog.getText(
-            self,
-            "Double authentification",
-            "Saisissez le code envoyé par Garmin :",
-        )
-        worker.provide_mfa(code.strip() if accepted else None)
-
     def _garmin_ok(self, name: object) -> None:
-        # Le mot de passe n'a servi qu'à cette connexion : on ne le garde pas.
-        self.garmin_password.clear()
         QMessageBox.information(self, "Garmin relié",
                                 f"Session ouverte pour {name}.")
 
     def _garmin_failed(self, message: str) -> None:
         QMessageBox.critical(self, "Connexion Garmin échouée", message)
+
+    def _garmin_rate_limited(self, message: str) -> None:
+        """Garmin temporise : le mot de passe reste saisi pour réessayer.
+
+        Une croix rouge et le mot « échouée » enverraient vérifier des
+        identifiants qui n'ont rien à se reprocher.
+        """
+        QMessageBox.warning(self, "Garmin temporise", message)
 
     def _open_strava(self) -> None:
         self.save_values()
@@ -498,7 +588,7 @@ class SettingsPage(QWidget):
 
         with StravaClient(settings.strava_client_id, settings.strava_client_secret) as client:
             url = client.authorize_url(settings.strava_redirect_uri)
-        QDesktopServices.openUrl(url)
+        AuthorizeDialog(url, self).exec()
 
     def _exchange_strava(self) -> None:
         from cairn.config import get_settings
