@@ -13,8 +13,9 @@ Deux pièges appris à l'usage :
 
 * les noms d'archives changent d'une version à l'autre — Linux est passé de
   `.tgz` à `.tar.zst`, et `ollama-darwin.tgz` n'existe pas dans les versions
-  anciennes. On interroge donc la liste réelle des fichiers publiés au lieu
-  de la deviner ;
+  anciennes. On essaie donc plusieurs noms et on retient celui qui répond,
+  sans passer par l'API de GitHub dont le quota est vite épuisé sur des
+  machines de compilation partagées ;
 * les archives Linux et Windows pèsent près d'un gigaoctet et demi parce
   qu'elles embarquent les bibliothèques CUDA et ROCm. On ne les extrait pas :
   un modèle de cette taille tourne très bien sur processeur.
@@ -24,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import platform
 import shutil
@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -44,7 +45,7 @@ MODELS = VENDOR / "ollama_models"
 DEFAULT_VERSION = "v0.32.6"
 DEFAULT_MODEL = "qwen3:0.6b"
 
-RELEASES = "https://api.github.com/repos/ollama/ollama/releases/tags/"
+DOWNLOAD = "https://github.com/ollama/ollama/releases/download"
 
 # Répertoires d'accélérateurs à ne pas embarquer : ils pèsent plus lourd que
 # tout le reste réuni et ne servent pas au modèle visé.
@@ -66,26 +67,44 @@ class Unavailable(RuntimeError):
     """Le moteur n'a pas pu être récupéré : la compilation continue sans lui."""
 
 
-def published_assets(version: str) -> dict[str, str]:
-    """Nom vers adresse de téléchargement, tel que publié pour cette version."""
+def asset_url(version: str, name: str) -> str:
+    return f"{DOWNLOAD}/{version}/{name}"
+
+
+def _available(url: str) -> bool:
+    """Le fichier existe-t-il, sans le télécharger ?
+
+    On interroge l'adresse de téléchargement plutôt que l'API : celle-ci
+    limite à soixante appels par heure et par adresse IP, un plafond que les
+    machines de compilation partagées atteignent sans peine — d'où des échecs
+    intermittents et incompréhensibles.
+    """
+    request = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(RELEASES + version, timeout=30) as response:  # noqa: S310
-            data = json.load(response)
-    except Exception as exc:  # noqa: BLE001 — réseau, quota, version inconnue
-        raise Unavailable(f"Liste des fichiers de {version} illisible : {exc}") from exc
-    return {a["name"]: a["browser_download_url"] for a in data.get("assets", [])}
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            return response.status == 200
+    except urllib.error.HTTPError as exc:
+        # Un code autre que 404 peut venir d'une redirection mal suivie : on
+        # laisse le téléchargement trancher plutôt que d'écarter à tort.
+        return exc.code != 404
+    except Exception:  # noqa: BLE001 — réseau capricieux
+        return True
 
 
-def choose_asset(assets: dict[str, str]) -> tuple[str, str]:
+def choose_asset(version: str) -> tuple[str, str]:
     key = (platform.system(), platform.machine())
     if key not in CANDIDATES:
         raise Unavailable(f"Plateforme non gérée pour l'embarquement : {key}")
 
+    tried = []
     for name in CANDIDATES[key]:
-        if name in assets:
-            return name, assets[name]
+        url = asset_url(version, name)
+        if _available(url):
+            return name, url
+        tried.append(name)
+
     raise Unavailable(
-        f"Aucune archive utilisable pour {key}. Publiées : {', '.join(sorted(assets))}"
+        f"Aucune archive pour {key} dans {version} (essayé : {', '.join(tried)})"
     )
 
 
@@ -98,18 +117,16 @@ def download(url: str, target: Path) -> Path:
     return target
 
 
-def verify(archive: Path, assets: dict[str, str]) -> None:
+def verify(archive: Path, version: str) -> None:
     """Compare l'empreinte publiée à celle du fichier reçu.
 
     On s'apprête à exécuter ce binaire : mieux vaut savoir qu'il est bien
     celui qu'Ollama a publié.
     """
-    if "sha256sum.txt" not in assets:
-        print("  pas d'empreinte publiée, vérification impossible")
-        return
-
     try:
-        with urllib.request.urlopen(assets["sha256sum.txt"], timeout=30) as response:  # noqa: S310
+        with urllib.request.urlopen(  # noqa: S310
+            asset_url(version, "sha256sum.txt"), timeout=30
+        ) as response:
             listing = response.read().decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         print(f"  empreintes illisibles ({exc}), vérification ignorée")
@@ -173,14 +190,31 @@ def extract(archive: Path, destination: Path) -> None:
 
 
 def locate_binary(root: Path) -> Path:
-    for name in ("ollama", "ollama.exe"):
-        for candidate in (root / "bin" / name, root / name):
-            if candidate.exists():
+    """Trouve l'exécutable dans l'arborescence extraite.
+
+    Deux pièges, tous deux rencontrés en conditions réelles :
+
+    * les archives contiennent un répertoire `lib/ollama` à côté de
+      l'exécutable. Un test d'existence le retient volontiers, et Windows
+      refuse ensuite d'exécuter un répertoire — d'où un « accès refusé »
+      déroutant. On n'accepte donc que des fichiers ;
+    * l'exécutable s'appelle `ollama.exe` sous Windows, `ollama` ailleurs :
+      on cherche le nom de la plateforme courante en premier.
+    """
+    names = ("ollama.exe", "ollama") if platform.system() == "Windows" else ("ollama",)
+
+    for name in names:
+        for candidate in (root / name, root / "bin" / name):
+            if candidate.is_file():
                 return candidate
-        found = next(root.rglob(name), None)
-        if found is not None:
-            return found
-    raise Unavailable(f"Binaire ollama introuvable sous {root}")
+
+    for name in names:
+        for found in sorted(root.rglob(name)):
+            if found.is_file():
+                return found
+
+    listing = ", ".join(sorted(p.name for p in root.iterdir())) if root.is_dir() else "—"
+    raise Unavailable(f"Exécutable ollama introuvable sous {root} (contenu : {listing})")
 
 
 def pull_model(binary: Path, model: str) -> None:
@@ -250,11 +284,10 @@ def main() -> int:
         shutil.rmtree(VENDOR, ignore_errors=True)
         VENDOR.mkdir(parents=True, exist_ok=True)
 
-        assets = published_assets(args.version)
-        name, url = choose_asset(assets)
+        name, url = choose_asset(args.version)
 
         archive = download(url, VENDOR / name)
-        verify(archive, assets)
+        verify(archive, args.version)
         extract(archive, RUNTIME)
         archive.unlink()
 
