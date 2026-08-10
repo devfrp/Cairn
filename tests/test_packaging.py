@@ -202,6 +202,24 @@ def test_pull_model_signale_un_moteur_qui_ne_demarre_pas(
     assert time.monotonic() - start < 30, "le délai complet a été attendu"
 
 
+# ------------------------------------------------------- santé du paquet
+
+
+def test_chiffrement_operationnel() -> None:
+    """`cryptography` s'appuie sur une bibliothèque native liée à OpenSSL.
+
+    Un binaire construit contre un OpenSSL plus récent que celui présent
+    échoue à l'import, sur un symbole manquant — jamais à la compilation. Le
+    cas s'est produit sur macOS Intel, où la roue précompilée a disparu et où
+    pip recompilait donc depuis les sources. Comme cette bibliothèque chiffre
+    les jetons Garmin et Strava, un paquet où elle ne se charge pas ne sert
+    à rien.
+    """
+    from cairn.gui.app import check_crypto
+
+    assert check_crypto() is None
+
+
 def test_pull_model_ne_lance_rien_sans_binaire(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(fetch, "VENDOR", tmp_path)
     monkeypatch.setattr(fetch, "MODELS", tmp_path / "ollama_models")

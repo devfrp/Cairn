@@ -12,6 +12,13 @@ dependencies = [
     "garth>=0.5,<0.9",
     "fitdecode>=0.10",
     "cryptography>=43",
+    # Depuis la version 49, cryptography ne publie plus de binaire macOS que
+    # pour Apple Silicon. Sur un Mac Intel, pip la recompile alors depuis les
+    # sources et la lie à l'OpenSSL de la machine ; PyInstaller en embarque un
+    # autre, et l'application meurt au lancement sur un symbole manquant. La
+    # 48 reste fournie en binaire universel. Ce plafond ne vaut que là :
+    # ailleurs, une bibliothèque de chiffrement doit rester à jour.
+    "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "structlog>=24.4",
     "apscheduler>=3.10,<4",
     "typer>=0.12",

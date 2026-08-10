@@ -210,6 +210,27 @@ def _emit(line: str) -> None:
 _KEEP_ALIVE: list[object] = []
 
 
+def check_crypto() -> str | None:
+    """Chiffre puis déchiffre une valeur. Retourne l'erreur, ou None.
+
+    `cryptography` s'appuie sur une bibliothèque native liée à OpenSSL. Quand
+    l'OpenSSL embarqué est plus ancien que celui contre lequel elle a été
+    construite, l'import échoue sur un symbole manquant — jamais à la
+    compilation, toujours au premier lancement. Or c'est elle qui chiffre les
+    jetons Garmin et Strava : sans elle, aucun compte ne peut être relié ni
+    relu, et le paquet ne vaut rien.
+    """
+    try:
+        from cryptography.fernet import Fernet
+
+        key = Fernet(Fernet.generate_key())
+        if key.decrypt(key.encrypt(b"cairn")) != b"cairn":
+            return "chiffrement incohérent"
+    except Exception as exc:  # noqa: BLE001 — paquet incomplet
+        return f"{type(exc).__name__} : {exc}"
+    return None
+
+
 def check_webengine() -> str | None:
     """Affiche une page dans le moteur de rendu. Retourne l'erreur, ou None.
 
@@ -226,7 +247,10 @@ def check_webengine() -> str | None:
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
     try:
-        from cairn.gui.garmin_login import prepare_webengine
+        # `cairn.gui.webengine` et non `garmin_login` : ce dernier tire toute
+        # la chaîne Garmin, et la moindre dépendance cassée se serait affichée
+        # ici comme une panne d'affichage.
+        from cairn.gui.webengine import prepare_webengine
 
         prepare_webengine()
 
@@ -283,12 +307,24 @@ def selftest() -> int:
     _emit(f"moteur embarqué : {binary or 'absent'}")
     _emit(f"modèle embarqué : {model or 'absent'}")
 
-    # Sans moteur de rendu, aucun compte Garmin ne peut être relié : c'est un
-    # paquet cassé, pas un paquet amoindri.
+    # Les deux vérifications ci-dessous portent sur des pannes qui ne se
+    # voient pas à la compilation : le paquet se construit sans broncher et
+    # cède au premier lancement. Chacune rend le paquet inutilisable.
+    broken = False
+
+    failure = check_crypto()
+    _emit(f"chiffrement : {failure or 'opérationnel'}")
+    if failure:
+        _emit("→ aucun compte ne pourrait être relié ni relu.")
+        broken = True
+
     failure = check_webengine()
     _emit(f"moteur de rendu : {failure or 'opérationnel'}")
     if failure:
         _emit("→ la fenêtre de connexion Garmin resterait blanche.")
+        broken = True
+
+    if broken:
         return 1
 
     if binary is None or model is None:

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cairn.gui.webengine import prepare_webengine
 from cairn.sources.garmin import signin_url
 
 
@@ -99,20 +100,7 @@ class GarminLoginDialog(QDialog):
         self.accept()
 
 
-def prepare_webengine() -> None:
-    """Réglages à poser avant la création de QApplication.
-
-    Empaqueté en AppImage, le bac à sable de Chromium ne peut pas démarrer :
-    il lui faut un binaire auxiliaire installé avec le bit setuid, ce qu'une
-    archive portable ne peut pas fournir. Sans cette variable, la fenêtre de
-    connexion reste blanche. Le moteur ne sert qu'à afficher la page de
-    connexion de Garmin, jamais à naviguer ailleurs.
-    """
-    import os
-
-    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-    # Qt exige que les contextes OpenGL soient partagés lorsqu'un moteur de
-    # rendu coexiste avec des widgets classiques.
-    from PySide6.QtCore import QCoreApplication
-
-    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+# Réexporté par commodité : la fenêtre et son réglage préalable se pensent
+# ensemble, même s'ils vivent dans deux modules pour ne pas mêler leurs
+# dépendances.
+__all__ = ["GarminLoginDialog", "extract_ticket", "prepare_webengine"]
