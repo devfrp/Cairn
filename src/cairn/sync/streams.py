@@ -53,9 +53,16 @@ def zones_from_hr_max(hr_max: int, hr_rest: int | None = None) -> list[tuple[int
     return zones
 
 
-def get_zones(conn, athlete_id: int, day: dt.date) -> list[tuple[int, int, int]]:
-    """Zones en vigueur à cette date, ou dérivées de la FC max si besoin."""
-    zone_set = conn.execute(
+def zone_set_for(conn, athlete_id: int, day: dt.date):
+    """Jeu de zones applicable à cette date, à défaut le plus ancien connu.
+
+    Les services datent les zones du jour où ils les fournissent. À la
+    première synchronisation, elles sont donc postérieures à tout
+    l'historique : chercher « en vigueur ce jour-là » ne trouvait rien, et ni
+    les temps par zone ni le TRIMP n'étaient calculés pour une seule activité
+    passée. Le plus ancien jeu connu vaut mieux qu'aucune valeur.
+    """
+    applicable = conn.execute(
         """
         SELECT id, hr_max, hr_rest FROM hr_zone_set
          WHERE athlete_id = ? AND valid_from <= ?
@@ -63,6 +70,21 @@ def get_zones(conn, athlete_id: int, day: dt.date) -> list[tuple[int, int, int]]
         """,
         (athlete_id, day),
     ).fetchone()
+    if applicable is not None:
+        return applicable
+
+    return conn.execute(
+        """
+        SELECT id, hr_max, hr_rest FROM hr_zone_set
+         WHERE athlete_id = ? ORDER BY valid_from ASC LIMIT 1
+        """,
+        (athlete_id,),
+    ).fetchone()
+
+
+def get_zones(conn, athlete_id: int, day: dt.date) -> list[tuple[int, int, int]]:
+    """Zones en vigueur à cette date, ou dérivées de la FC max si besoin."""
+    zone_set = zone_set_for(conn, athlete_id, day)
     if zone_set is None:
         return []
 
@@ -203,14 +225,7 @@ def _athlete_reference(conn, athlete_id: int, day: dt.date) -> tuple[int | None,
     ).fetchone()
     hr_rest = row["rhr"] if row else None
 
-    zone_set = conn.execute(
-        """
-        SELECT hr_max, hr_rest FROM hr_zone_set
-         WHERE athlete_id = ? AND valid_from <= ?
-         ORDER BY valid_from DESC LIMIT 1
-        """,
-        (athlete_id, day),
-    ).fetchone()
+    zone_set = zone_set_for(conn, athlete_id, day)
 
     athlete = conn.execute("SELECT sex FROM athlete WHERE id = ?", (athlete_id,)).fetchone()
 

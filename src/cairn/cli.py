@@ -439,7 +439,7 @@ def raw_show(
 
     row = fetch_one(
         """
-        SELECT payload, fetched_at FROM raw.api_payload
+        SELECT payload, fetched_at FROM raw_api_payload
          WHERE source = %s AND endpoint = %s AND resource_key = %s
          ORDER BY fetched_at DESC LIMIT 1
         """,
@@ -459,7 +459,7 @@ def raw_endpoints() -> None:
     for row in fetch_all(
         """
         SELECT source, endpoint, count(*) AS n, max(fetched_at) AS last
-          FROM raw.api_payload GROUP BY source, endpoint ORDER BY source, endpoint
+          FROM raw_api_payload GROUP BY source, endpoint ORDER BY source, endpoint
         """
     ):
         typer.echo(

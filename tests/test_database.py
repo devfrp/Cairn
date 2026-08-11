@@ -393,3 +393,43 @@ class TestQueriesAgainstDatabase:
         assert queries.recovery().hrv is None
         # Le calendrier doit tout de même produire une série complète.
         assert len(queries.load(days=30).daily_series) == 31
+
+
+class TestLecturesDuTableauDeBord:
+    """Requêtes d'affichage exercées contre une vraie base.
+
+    Deux d'entre elles renvoyaient un résultat vide sans jamais lever :
+    `counts()` interrogeait `raw.api_payload`, syntaxe PostgreSQL restée après
+    la migration, et l'erreur était avalée par le garde-fou qui protège
+    l'interface. Une requête qui ne rend rien doit donc être vérifiée sur son
+    contenu, pas seulement sur son absence d'exception.
+    """
+
+    def test_counts_renvoie_bien_ses_compteurs(self, base):
+        from cairn.gui import queries
+
+        c = queries.counts()
+
+        assert c, "un dictionnaire vide signale une requête en échec, pas une base vide"
+        assert set(c) == {"activities", "with_streams", "nights", "payloads", "gear"}
+
+    def test_duree_de_sommeil_sans_score(self, base):
+        """Toutes les montres ne calculent pas de score de sommeil.
+
+        La durée était lue en même temps que lui : sans score, des centaines de
+        nuits mesurées disparaissaient de l'écran.
+        """
+        from cairn.gui import queries
+
+        db.execute("INSERT INTO athlete (id, display_name) VALUES (1, 'test')")
+        db.execute(
+            """INSERT INTO sleep_session (athlete_id, sleep_date, start_time, end_time,
+                                          duration_s, score)
+               VALUES (1, date('now','localtime','-1 day'), datetime('now','-9 hours'),
+                       datetime('now'), 28800, NULL)"""
+        )
+
+        recuperation = queries.recovery()
+
+        assert recuperation.sleep_score is None
+        assert recuperation.sleep_duration_s == 28800

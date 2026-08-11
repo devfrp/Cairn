@@ -158,6 +158,10 @@ def recovery(days: int = 30) -> Recovery:
             result.resting_hr = entry["resting_hr"]
         if result.sleep_score is None and entry["sleep_score"] is not None:
             result.sleep_score = entry["sleep_score"]
+        # Durée cherchée séparément du score : toutes les montres ne calculent
+        # pas de score de sommeil, et la lier à lui faisait disparaître des
+        # centaines de nuits pourtant mesurées.
+        if result.sleep_duration_s is None and entry["duration_s"] is not None:
             result.sleep_duration_s = entry["duration_s"]
         if result.body_battery is None and entry["body_battery_high"] is not None:
             result.body_battery = entry["body_battery_high"]
@@ -281,11 +285,13 @@ def counts() -> dict[str, int]:
         SELECT (SELECT count(*) FROM activity) AS activities,
                (SELECT count(*) FROM activity WHERE has_streams) AS with_streams,
                (SELECT count(*) FROM sleep_session) AS nights,
-               (SELECT count(*) FROM raw.api_payload) AS payloads,
+               (SELECT count(*) FROM raw_api_payload) AS payloads,
                (SELECT count(*) FROM gear) AS gear
         """
     )
-    return row[0] if row else {}
+    # Converti en dictionnaire : la ligne brute s'itère par position, ce qui
+    # surprend quiconque fait confiance à la signature.
+    return dict(row[0]) if row else {}
 
 
 def cursors() -> list[dict[str, Any]]:

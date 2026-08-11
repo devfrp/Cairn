@@ -332,3 +332,70 @@ class TestRecompute:
         row = db.fetch_one("SELECT * FROM v_daily WHERE day = ?", (end,))
         assert row["ctl"] is not None
         assert row["load"] == 100.0
+
+
+class TestZonesAnterieuresAuJeuConnu:
+    """Zones datées d'après l'activité qu'elles doivent servir.
+
+    Les services datent les zones du jour où ils les fournissent. À la
+    première synchronisation, elles sont donc postérieures à tout
+    l'historique : chercher « en vigueur ce jour-là » ne trouvait rien, et ni
+    les temps par zone ni le TRIMP n'étaient calculés — CTL, ATL et TSB
+    restaient à zéro sur cent activités. Le défaut ne se voit qu'avec un
+    historique antérieur au premier jeu de zones, ce qu'aucun test ne
+    fabriquait.
+    """
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 'test')")
+            conn.execute(
+                """INSERT INTO hr_zone_set (athlete_id, valid_from, hr_max, hr_rest, source)
+                   VALUES (1, '2026-08-11', 190, 45, 'strava')"""
+            )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_jeu_posterieur_sert_quand_meme(self, base) -> None:
+        import datetime as dt
+
+        from cairn.db import connection
+        from cairn.sync.streams import zone_set_for
+
+        with connection() as conn:
+            trouve = zone_set_for(conn, 1, dt.date(2025, 10, 5))
+
+        assert trouve is not None, "une activité d'octobre doit trouver les zones d'août"
+        assert trouve["hr_max"] == 190
+
+    def test_zones_derivees_pour_une_date_ancienne(self, base) -> None:
+        import datetime as dt
+
+        from cairn.db import connection
+        from cairn.sync.streams import get_zones
+
+        with connection() as conn:
+            zones = get_zones(conn, 1, dt.date(2025, 10, 5))
+
+        assert zones, "sans zones, aucun temps par zone n'est calculé"
+        assert len(zones) == 5
+
+    def test_aucun_jeu_du_tout(self, base) -> None:
+        import datetime as dt
+
+        from cairn.db import connection, execute
+        from cairn.sync.streams import zone_set_for
+
+        execute("DELETE FROM hr_zone_set")
+        with connection() as conn:
+            assert zone_set_for(conn, 1, dt.date(2026, 1, 1)) is None
