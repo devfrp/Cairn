@@ -395,3 +395,26 @@ class TestRenduDuGraphe:
         top = chart.BAND_SPACING
         assert chart.BAND_SPACING >= 20, "sans marge, le titre retombe dans la bande"
         assert top - 9 < top
+
+    def test_titres_et_graduations_ne_se_chevauchent_pas(self, qt_app):
+        """Le titre d'une bande retombait sur la graduation basse de l'autre.
+
+        « Sommeil » se posait par-dessus « 42 bpm », et ainsi de suite : la
+        colonne de gauche devenait illisible dès qu'on empilait des séries.
+        """
+        from PySide6.QtGui import QFontMetrics
+
+        chart = self.chart([
+            self.serie("une", list(range(15)), "#6b9bd2"),
+            self.serie("deux", list(range(15)), "#5fa87a"),
+            self.serie("trois", list(range(15)), "#e8834a"),
+        ])
+        metrics = QFontMetrics(chart.font())
+
+        for rang in range(1, len(chart._series)):
+            top = rang * (chart.BAND_HEIGHT + chart.BAND_SPACING) + chart.BAND_SPACING
+            titre = top - 9
+            graduation_precedente = (top - chart.BAND_SPACING) + metrics.ascent() // 2 - 1
+            assert titre - graduation_precedente >= metrics.height(), (
+                f"bande {rang} : titre et graduation à moins d'une ligne"
+            )

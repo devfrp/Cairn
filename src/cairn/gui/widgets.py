@@ -382,7 +382,7 @@ class TrendChart(QWidget):
     """
 
     BAND_HEIGHT = 82
-    BAND_SPACING = 26
+    BAND_SPACING = 40
     LABEL_WIDTH = 132
     RIGHT_MARGIN = 12
     AXIS_HEIGHT = 22
@@ -507,8 +507,16 @@ class TrendChart(QWidget):
                 grid.setStyle(Qt.PenStyle.DotLine)
             painter.setPen(grid)
             painter.drawLine(self.LABEL_WIDTH, y, droite, y)
+            # Alignées à droite, contre le graphe : elles forment une colonne
+            # nette, et ne se confondent plus avec le titre de la bande, qui
+            # part de la gauche.
             painter.setPen(QColor(theme.MUTED))
-            painter.drawText(0, y + metrics.ascent() // 2 - 1, unit(valeur))
+            texte = unit(valeur)
+            painter.drawText(
+                self.LABEL_WIDTH - 10 - metrics.horizontalAdvance(texte),
+                y + metrics.ascent() // 2 - 1,
+                texte,
+            )
 
         path = QPainterPath()
         started = False
