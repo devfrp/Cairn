@@ -267,7 +267,7 @@ def recent_activities(limit: int = 60) -> list[dict[str, Any]]:
     """
     rows = _safe(
         """
-        SELECT a.start_time_local, a.sport, a.name, a.distance_m, a.elevation_gain_m,
+        SELECT a.id, a.start_time_local, a.sport, a.name, a.distance_m, a.elevation_gain_m,
                a.elapsed_s, a.avg_hr, a.max_hr,
                coalesce(a.training_load, a.trimp) AS load,
                a.has_streams, g.name AS gear_name,
@@ -446,3 +446,69 @@ def active_flags(days: int = 10) -> list[dict[str, Any]]:
         """,
         (-days, -days),
     )
+
+
+def activity_detail(activity_id: int) -> dict[str, Any] | None:
+    """Une activité, avec son matériel et les sources qui l'ont vue."""
+    rows = _safe(
+        """
+        SELECT a.*, g.name AS gear_name,
+               (SELECT group_concat(source) FROM activity_source
+                 WHERE activity_id = a.id) AS sources
+          FROM activity a
+          LEFT JOIN gear g ON g.id = a.gear_id
+         WHERE a.id = ?
+        """,
+        (activity_id,),
+    )
+    return dict(rows[0]) if rows else None
+
+
+def activity_streams(activity_id: int, points: int = 420) -> dict[str, Any]:
+    """Relevés seconde par seconde d'une sortie, ramenés à `points` valeurs.
+
+    Une sortie de deux heures compte plus de sept mille relevés, bien au-delà
+    de ce qu'un graphe large de mille pixels peut montrer. On échantillonne
+    donc à intervalle régulier plutôt que de tout tracer : le tracé est
+    identique à l'œil et le rendu reste immédiat.
+    """
+    total = fetch_one(
+        "SELECT count(*) AS n FROM activity_stream WHERE activity_id = ?",
+        (activity_id,),
+    )
+    if not total or not total["n"]:
+        return {"labels": [], "series": {}}
+
+    pas = max(1, total["n"] // points)
+    rows = _safe(
+        """
+        SELECT elapsed_s, hr, altitude_m, speed_mps, cadence
+          FROM (
+            SELECT elapsed_s, hr, altitude_m, speed_mps, cadence,
+                   row_number() OVER (ORDER BY elapsed_s) AS rang
+              FROM activity_stream WHERE activity_id = ?
+          )
+         WHERE rang % ? = 0 ORDER BY elapsed_s
+        """,
+        (activity_id, pas),
+    )
+    return {
+        "labels": [_elapsed_label(r["elapsed_s"]) for r in rows],
+        "series": {
+            "hr": [r["hr"] for r in rows],
+            "altitude_m": [r["altitude_m"] for r in rows],
+            # Le mètre par seconde ne parle à personne.
+            "speed_kmh": [
+                r["speed_mps"] * 3.6 if r["speed_mps"] is not None else None for r in rows
+            ],
+            "cadence": [r["cadence"] for r in rows],
+        },
+    }
+
+
+def _elapsed_label(seconds: float | None) -> str:
+    """Temps écoulé depuis le départ, en h:mm."""
+    if seconds is None:
+        return "—"
+    total = int(seconds)
+    return f"{total // 3600}:{total % 3600 // 60:02d}"

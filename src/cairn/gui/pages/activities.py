@@ -160,9 +160,24 @@ class ActivitiesPage(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(False)
+        # Le détail seconde par seconde est ce qu'on cherche en cliquant une
+        # ligne : les totaux du tableau ne disent rien du déroulé.
+        self.table.doubleClicked.connect(self._open_detail)
         layout.addWidget(self.table, 1)
 
+        aide = QLabel("Double-cliquez une sortie pour voir son déroulé.")
+        aide.setObjectName("PageHint")
+        layout.addWidget(aide)
+
         self._all: list[dict[str, Any]] = []
+
+    def _open_detail(self, index) -> None:
+        ligne = self.model._rows[index.row()] if index.isValid() else None
+        if not ligne or not ligne.get("id"):
+            return
+        from cairn.gui.pages.activity_detail import ActivityDetailDialog
+
+        ActivityDetailDialog(ligne["id"], self).exec()
 
     def refresh(self, health: queries.Health) -> None:
         if not health.usable:

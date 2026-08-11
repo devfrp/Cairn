@@ -418,3 +418,94 @@ class TestRenduDuGraphe:
             assert titre - graduation_precedente >= metrics.height(), (
                 f"bande {rang} : titre et graduation à moins d'une ligne"
             )
+
+
+class TestDetailDUneSortie:
+    """Les relevés seconde par seconde, jusque-là invisibles.
+
+    Cent un fichiers `.fit` téléchargés, quatre-vingt-quatre mille points
+    extraits, et rien qui les affiche : la page Activités s'arrêtait aux
+    totaux.
+    """
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            conn.execute(
+                """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                         local_date, sport, sport_family, elapsed_s,
+                                         distance_m, avg_hr, primary_source, name)
+                   VALUES (1, 1, '2026-07-01T08:00:00+00:00', '2026-07-01T10:00:00',
+                           '2026-07-01', 'mtb', 'cycling', 3600, 24000, 148,
+                           'garmin', 'Enduro du matin')"""
+            )
+            for seconde in range(0, 3600, 5):
+                conn.execute(
+                    """INSERT INTO activity_stream (activity_id, time, elapsed_s, hr,
+                                                    altitude_m, speed_mps)
+                       VALUES (1, ?, ?, ?, ?, ?)""",
+                    (f"2026-07-01T08:{seconde // 60:02d}:00+00:00", seconde,
+                     120 + seconde % 60, 300 + seconde % 200, 5.0),
+                )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_echantillonnage(self, base):
+        """Sept mille relevés ne se tracent pas sur mille pixels."""
+        from cairn.gui import queries
+
+        flux = queries.activity_streams(1, points=100)
+
+        assert 50 <= len(flux["labels"]) <= 200
+        assert flux["labels"][0] == "0:00"
+
+    def test_vitesse_convertie_en_kmh(self, base):
+        """Le mètre par seconde ne parle à personne."""
+        from cairn.gui import queries
+
+        flux = queries.activity_streams(1)
+
+        assert flux["series"]["speed_kmh"][0] == pytest.approx(18.0)
+
+    def test_sortie_sans_flux(self, base):
+        from cairn.gui import queries
+
+        assert queries.activity_streams(999) == {"labels": [], "series": {}}
+
+    def test_fenetre_montre_les_courbes(self, qt_app, base):
+        from cairn.gui.pages.activity_detail import ActivityDetailDialog
+
+        fenetre = ActivityDetailDialog(1)
+
+        assert fenetre.windowTitle() == "Enduro du matin"
+        assert fenetre.chart is not None
+        labels = [s["label"] for s in fenetre.chart._series]
+        assert "Fréquence cardiaque" in labels
+        # La cadence n'est pas mesurée ici : sa bande ne doit pas apparaître.
+        assert "Cadence" not in labels
+
+    def test_fenetre_sans_flux_le_dit(self, qt_app, base):
+        from cairn.db import execute
+        from cairn.gui.pages.activity_detail import ActivityDetailDialog
+
+        execute("DELETE FROM activity_stream")
+        fenetre = ActivityDetailDialog(1)
+
+        assert fenetre.chart is None
+
+    def test_temps_ecoule_lisible(self):
+        from cairn.gui.queries import _elapsed_label
+
+        assert _elapsed_label(0) == "0:00"
+        assert _elapsed_label(3661) == "1:01"
+        assert _elapsed_label(None) == "—"
