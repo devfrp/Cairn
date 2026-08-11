@@ -264,13 +264,15 @@ def _detect_signals(facts: WeeklyFacts) -> None:
     """Signaux notables, formulés en clair et déjà chiffrés."""
     change = facts.load_change_pct
     if change is not None and change > LOAD_SURGE_PCT:
+        # Le pourcentage est déjà donné par le récit : le répéter ici le
+        # faisait apparaître deux fois dans deux phrases consécutives. Ce qui
+        # manque, c'est la portée de cette hausse, pas sa valeur.
         facts.signals.append(
-            f"la charge a augmenté de {change:.0f} % par rapport à la semaine précédente"
+            "la progression de charge dépasse ce qui est habituellement conseillé"
         )
-    elif change is not None and change < -LOAD_SURGE_PCT:
-        facts.signals.append(
-            f"la charge a baissé de {abs(change):.0f} % par rapport à la semaine précédente"
-        )
+    # Une baisse n'est pas un signal : elle n'appelle aucune action, et le
+    # récit la mentionne déjà. La faire figurer ici déclenchait en prime un
+    # conseil d'alléger la semaine — alors qu'elle venait justement de l'être.
 
     if facts.hrv_days_below >= HRV_SUPPRESSED_DAYS:
         facts.signals.append(

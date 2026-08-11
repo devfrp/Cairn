@@ -118,14 +118,27 @@ class TestAllowedNumbers:
 
 class TestSignals:
     def test_hausse_de_charge(self):
+        """Une progression trop rapide reste un signal — sans son chiffre.
+
+        Le pourcentage figure déjà dans le récit ; le répéter ici l'affichait
+        deux fois à une phrase d'intervalle.
+        """
         data = facts(load=1000.0, previous_load=400.0)
         _detect_signals(data)
-        assert any("augmenté" in s for s in data.signals)
+        assert any("progression" in s for s in data.signals)
+        assert not any("150" in s for s in data.signals)
 
-    def test_baisse_de_charge(self):
+    def test_baisse_de_charge_nest_pas_un_signal(self):
+        """Une baisse n'appelle aucune action.
+
+        La faire figurer parmi les signaux déclenchait un conseil d'alléger la
+        semaine — alors qu'elle venait justement de l'être.
+        """
         data = facts(load=100.0, previous_load=600.0)
         _detect_signals(data)
-        assert any("baissé" in s for s in data.signals)
+        # D'autres signaux peuvent exister (la fixture a une FC élevée) :
+        # c'est l'absence de signal *de charge* qui est vérifiée ici.
+        assert not any("charge" in s or "baiss" in s for s in data.signals)
 
     def test_charge_stable_sans_signal(self):
         data = facts(load=440.0, previous_load=430.0)
@@ -232,3 +245,92 @@ class TestDiscord:
         message = format_message("x" * 5000, START, END, "model")
         assert len(message) < MAX_CONTENT + 200
         assert message.endswith("…")
+
+
+class TestConseilCoherentAvecLaCharge:
+    """Le conseil doit suivre le sens de la variation.
+
+    Une baisse de charge figurait parmi les signaux, ce qui déclenchait un
+    « une semaine allégée paraît indiquée » — alors que la semaine venait
+    justement de l'être. Le pourcentage était en prime annoncé deux fois, dans
+    deux phrases consécutives.
+    """
+
+    def facts(self, change_pct):
+        import datetime as dt
+
+        from cairn.insights.facts import WeeklyFacts
+
+        f = WeeklyFacts(start=dt.date(2026, 8, 3), end=dt.date(2026, 8, 9))
+        f.sessions = 12
+        f.duration_s = 28260
+        f.distance_m = 57000
+        f.elevation_m = 610
+        f.load = 463
+        f.previous_load = 463 / (1 + change_pct / 100)
+        return f
+
+    def test_baisse_nest_pas_un_signal(self):
+        from cairn.insights.facts import _detect_signals
+
+        f = self.facts(-36)
+        _detect_signals(f)
+
+        assert f.signals == [], "une baisse n'appelle aucune action"
+
+    def test_hausse_signalee_sans_repeter_le_chiffre(self):
+        from cairn.insights.facts import _detect_signals
+
+        f = self.facts(45)
+        _detect_signals(f)
+
+        assert f.signals, "une progression trop rapide reste un signal"
+        # Le récit donne déjà « en hausse de 45 % » : le redire ici affichait
+        # deux fois le même nombre à une phrase d'intervalle.
+        assert "45" not in " ".join(f.signals)
+
+    def test_texte_sans_conseil_apres_une_baisse(self):
+        from cairn.insights.facts import _detect_signals
+        from cairn.insights.weekly import fallback_summary
+
+        f = self.facts(-36)
+        _detect_signals(f)
+        texte = fallback_summary(f)
+
+        assert "en baisse de 36 %" in texte
+        assert "allégée" not in texte, "conseiller d'alléger une semaine déjà allégée"
+        assert texte.count("36 %") == 1, "le même chiffre deux fois"
+
+
+class TestModeleNonSollicitéParDefaut:
+    """Le modèle embarqué invente des liens que le garde-fou ne voit pas.
+
+    Éprouvé sur des données réelles : « une baisse de charge de 36 %, ce qui
+    indique une augmentation du rythme cardiaque ». Les chiffres sont exacts,
+    c'est ce qu'on leur fait dire qui est faux. Le texte déterministe, moins
+    fluide, ne se trompe jamais.
+    """
+
+    def test_defaut_deterministe(self, monkeypatch, tmp_path):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.delenv("CAIRN_SUMMARY_USE_MODEL", raising=False)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+
+        from cairn.insights import weekly
+
+        resultat = weekly.generate()
+
+        assert resultat["source"] == "fallback"
+        db.close_pool()
+        reset_settings()
+
+    def test_consigne_interdit_le_raisonnement(self):
+        from cairn.insights.weekly import SYSTEM_PROMPT
+
+        assert "n'établis aucun lien" in SYSTEM_PROMPT
+        assert "aucun conseil de ton cru" in SYSTEM_PROMPT

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 
 import structlog
 
@@ -21,13 +22,27 @@ from cairn.insights.ollama import OllamaClient, OllamaUnavailable, verify_number
 
 log = structlog.get_logger(__name__)
 
+# Le modèle embarqué compte six cents millions de paramètres : il rédige
+# correctement, mais raisonne mal. Livré à lui-même il relie deux mesures par
+# une cause inventée — « une baisse de charge de 36 %, ce qui indique une
+# augmentation du rythme cardiaque » — et propose l'inverse de ce qu'il
+# faudrait. Le garde-fou numérique n'y voit rien : aucun chiffre n'est faux,
+# c'est le lien qui l'est.
+#
+# D'où une consigne qui lui retire tout ce qui demande de raisonner. Les
+# conclusions sont calculées par Cairn et figurent déjà dans le bilan, sous
+# « À SIGNALER » : il n'a qu'à les rapporter.
 SYSTEM_PROMPT = (
     "Tu es l'assistant d'un cycliste et traileur. On te donne le bilan chiffré "
     "de sa semaine. Ta seule tâche est de le reformuler en français, en trois "
     "ou quatre phrases courtes. "
     "N'invente aucun chiffre : n'utilise que ceux fournis. "
     "N'ajoute aucune donnée absente du bilan. "
-    "Termine par une recommandation concrète pour la semaine à venir. "
+    "N'explique aucune cause et n'établis aucun lien entre deux mesures : "
+    "contente-toi de rapporter ce qui est écrit. "
+    "Ne donne aucun conseil de ton cru : s'il y a une rubrique « À SIGNALER », "
+    "reprends-la telle quelle ; sinon, dis simplement qu'aucun signal "
+    "particulier n'est apparu. "
     "Ton direct et sobre, pas de formule d'introduction, pas de liste."
 )
 
@@ -189,12 +204,25 @@ def fallback_summary(facts: WeeklyFacts) -> str:
 def generate(
     start: dt.date | None = None,
     end: dt.date | None = None,
-    use_model: bool = True,
+    use_model: bool | None = None,
 ) -> dict:
     """Produit le résumé de la semaine et l'enregistre.
 
     Retourne le texte, sa provenance et, le cas échéant, ce qui a été rejeté.
+
+    Le modèle n'est plus sollicité par défaut. Éprouvé sur des données réelles,
+    celui qu'embarque l'application invente des liens entre mesures — « une
+    baisse de charge de 36 %, ce qui indique une augmentation du rythme
+    cardiaque » — et des comparaisons qui n'existent pas. Le garde-fou
+    numérique n'attrape rien de tout cela : les chiffres cités sont exacts,
+    c'est ce qu'on leur fait dire qui est faux. Le texte déterministe, moins
+    fluide, ne se trompe jamais.
+
+    `CAIRN_SUMMARY_USE_MODEL=1` réactive la rédaction — utile avec un modèle
+    plus gros configuré à part.
     """
+    if use_model is None:
+        use_model = os.environ.get("CAIRN_SUMMARY_USE_MODEL", "").strip() in {"1", "true", "oui"}
     if start is None or end is None:
         start, end = facts_module.last_complete_week()
 
