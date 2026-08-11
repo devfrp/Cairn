@@ -376,7 +376,10 @@ class DashboardPage(QWidget):
         elif tsb < -20:
             hint, colour = "fatigue accumulée", theme.DANGER
         elif tsb < -5:
-            hint, colour = "en charge, normal en bloc", theme.WARN
+            # « normal en bloc » venait du jargon d'entraînement — un bloc
+            # étant une période de charge volontaire. Illisible pour qui ne
+            # l'a pas déjà croisé.
+            hint, colour = "en charge, rien d'anormal", theme.WARN
         else:
             hint, colour = "à l'équilibre", theme.OK
         self.tsb.set_value(f"{tsb:+.0f}", hint, colour)
