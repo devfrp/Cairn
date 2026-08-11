@@ -21,9 +21,9 @@ from cairn.gui import queries, theme
 from cairn.gui.widgets import (
     Card,
     SectionHeader,
-    Sparkline,
     StatCard,
     StatusPill,
+    TrendChart,
     format_distance,
     format_duration,
     format_elevation,
@@ -90,25 +90,12 @@ class DashboardPage(QWidget):
         trend_title.setObjectName("SectionTitle")
         trends.layout().addWidget(trend_title)
 
-        self.hrv_spark = Sparkline()
-        self.rhr_spark = Sparkline()
-        self.load_spark = Sparkline()
+        hint = QLabel("Survolez le graphe pour lire une journée en détail.")
+        hint.setObjectName("CardHint")
+        trends.layout().addWidget(hint)
 
-        # Le libellé est retenu avec sa courbe : une série que la montre ne
-        # fournit pas laissait sa bande vide à l'écran, titre compris, comme
-        # si l'affichage était cassé.
-        self.trend_rows = {}
-        for cle, caption, spark, colour in (
-            ("hrv", "Variabilité cardiaque", self.hrv_spark, theme.SERIES[1]),
-            ("rhr", "FC de repos", self.rhr_spark, theme.SERIES[2]),
-            ("load", "Charge quotidienne", self.load_spark, theme.ACCENT),
-        ):
-            label = QLabel(caption)
-            label.setObjectName("CardHint")
-            trends.layout().addWidget(label)
-            spark.set_values([], colour)
-            trends.layout().addWidget(spark)
-            self.trend_rows[cle] = (label, spark)
+        self.trend_chart = TrendChart()
+        trends.layout().addWidget(self.trend_chart)
 
         layout.addWidget(trends)
 
@@ -254,19 +241,43 @@ class DashboardPage(QWidget):
         self._fill_fitness(queries.fitness())
         self._fill_signals(queries.active_flags())
 
-        self.hrv_spark.set_values(recovery.hrv_series, theme.SERIES[1])
-        self.rhr_spark.set_values(recovery.rhr_series, theme.SERIES[2])
-        self.load_spark.set_values(load.daily_series, theme.ACCENT)
-
-        for cle, series in (
-            ("hrv", recovery.hrv_series),
-            ("rhr", recovery.rhr_series),
-            ("load", load.daily_series),
-        ):
-            label, spark = self.trend_rows[cle]
-            renseignee = any(v is not None for v in series)
-            label.setVisible(renseignee)
-            spark.setVisible(renseignee)
+        # Chaque mesure garde son unité : mêlées sur un axe commun, des bpm et
+        # des heures ne voudraient rien dire.
+        self.trend_chart.set_data(
+            recovery.days or load.days,
+            [
+                {
+                    "label": "Variabilité cardiaque",
+                    "values": recovery.hrv_series,
+                    "colour": theme.SERIES[4],
+                    "unit": lambda v: f"{v:.0f} ms",
+                },
+                {
+                    "label": "FC de repos",
+                    "values": recovery.rhr_series,
+                    "colour": theme.SERIES[2],
+                    "unit": lambda v: f"{v:.0f} bpm",
+                },
+                {
+                    "label": "Sommeil",
+                    "values": recovery.sleep_series,
+                    "colour": theme.SERIES[1],
+                    "unit": lambda v: format_duration(int(v)),
+                },
+                {
+                    "label": "Body Battery",
+                    "values": recovery.battery_series,
+                    "colour": theme.SERIES[3],
+                    "unit": lambda v: f"{v:.0f}",
+                },
+                {
+                    "label": "Charge quotidienne",
+                    "values": load.daily_series,
+                    "colour": theme.ACCENT,
+                    "unit": lambda v: f"{v:.0f}",
+                },
+            ],
+        )
 
         if not any(v for v in load.daily_series) and recovery.hrv is None:
             self.empty_notice.setText(

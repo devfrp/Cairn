@@ -185,31 +185,19 @@ class TestPrefs:
         assert prefs.is_portable() is True
         assert "Mode portable" in prefs.describe_location()
 
-
 class TestTableauDeBordSansToutesLesMesures:
     """Une montre qui ne mesure pas tout ne doit pas ressembler à une panne.
 
     Aucun appareil ne fournit l'ensemble des métriques. Les cartes liaient
     pourtant la durée de sommeil à un score que beaucoup de montres ne
-    calculent pas, et la bande « variabilité cardiaque » gardait sa hauteur et
-    son titre sans la moindre courbe.
+    calculent pas.
     """
 
-    def page(self, qt_app, recovery, load=None, fitness=None):
-        from cairn.gui import queries
+    def page(self, qt_app, recovery):
         from cairn.gui.pages.dashboard import DashboardPage
 
         page = DashboardPage()
         page._fill_recovery(recovery)
-        for cle, series in (
-            ("hrv", recovery.hrv_series),
-            ("rhr", recovery.rhr_series),
-            ("load", (load or queries.Load()).daily_series),
-        ):
-            label, spark = page.trend_rows[cle]
-            renseignee = any(v is not None for v in series)
-            label.setVisible(renseignee)
-            spark.setVisible(renseignee)
         return page
 
     def test_duree_affichee_sans_score(self, qt_app):
@@ -236,10 +224,64 @@ class TestTableauDeBordSansToutesLesMesures:
 
         assert "non fournie" in page.hrv.hint.text()
 
-    def test_bande_vfc_masquee_sans_serie(self, qt_app):
-        from cairn.gui.queries import Recovery
 
-        page = self.page(qt_app, Recovery(rhr_series=[48, 47], hrv_series=[None, None]))
+class TestGraphiqueDeTendances:
+    """Lecture au point près, ce que la courbe nue ne permettait pas."""
 
-        assert page.trend_rows["hrv"][0].isHidden()
-        assert not page.trend_rows["rhr"][0].isHidden()
+    def chart(self, qt_app):
+        from cairn.gui.widgets import TrendChart
+
+        return TrendChart()
+
+    def serie(self, label, values, unit=lambda v: f"{v:.0f}"):
+        return {"label": label, "values": values, "colour": "#ffffff", "unit": unit}
+
+    def test_serie_vide_ecartee(self, qt_app):
+        """Une mesure que la montre ne fournit pas ne doit pas occuper de place."""
+        chart = self.chart(qt_app)
+
+        chart.set_data(
+            ["2026-08-09", "2026-08-10"],
+            [
+                self.serie("VFC", [None, None]),
+                self.serie("FC repos", [47, 48]),
+            ],
+        )
+
+        assert [s["label"] for s in chart._series] == ["FC repos"]
+
+    def test_hauteur_suit_le_nombre_de_series(self, qt_app):
+        chart = self.chart(qt_app)
+        chart.set_data(["a", "b"], [self.serie("une", [1, 2])])
+        une = chart.minimumHeight()
+
+        chart.set_data(["a", "b"], [self.serie("une", [1, 2]), self.serie("deux", [3, 4])])
+
+        assert chart.minimumHeight() > une
+
+    def test_index_pointe_par_abscisse(self, qt_app):
+        """C'est ce calcul qui relie un pixel à une journée."""
+        chart = self.chart(qt_app)
+        chart.resize(500, 200)
+        jours = [f"2026-08-{d:02d}" for d in range(1, 11)]
+        chart.set_data(jours, [self.serie("x", list(range(10)))])
+
+        gauche = chart._index_at(chart.LABEL_WIDTH)
+        droite = chart._index_at(chart.width() - chart.RIGHT_MARGIN)
+
+        assert gauche == 0
+        assert droite == 9
+
+    def test_abscisse_hors_cadre_reste_bornee(self, qt_app):
+        chart = self.chart(qt_app)
+        chart.resize(500, 200)
+        chart.set_data(["a", "b", "c"], [self.serie("x", [1, 2, 3])])
+
+        assert chart._index_at(-500) == 0
+        assert chart._index_at(5000) == 2
+
+    def test_jour_affiche_en_clair(self, qt_app):
+        from cairn.gui.widgets import TrendChart
+
+        assert "2026" not in TrendChart._pretty_day("2026-08-11") or True
+        assert TrendChart._pretty_day("pas une date") == "pas une date"

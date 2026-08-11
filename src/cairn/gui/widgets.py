@@ -361,3 +361,198 @@ class ColumnChart(QWidget):
             )
 
         painter.end()
+
+
+class TrendChart(QWidget):
+    """Séries quotidiennes empilées, lisibles au point près.
+
+    La version précédente traçait une courbe nue, sans repère ni valeur : on
+    voyait une forme sans jamais savoir de quel jour ni de quel chiffre il
+    s'agissait. Trois manques comblés ici :
+
+    * chaque bande porte son minimum et son maximum, et la dernière valeur ;
+    * un repère vertical suit le curseur, aligné sur toutes les séries à la
+      fois — c'est la comparaison entre elles qui a du sens, pas la lecture
+      d'une seule ;
+    * un encart donne la date pointée et la valeur de chaque mesure ce
+      jour-là, formatée dans son unité.
+
+    Les séries n'ont pas la même échelle — des bpm et des heures ne se
+    superposent pas — d'où une bande par mesure plutôt qu'un axe commun.
+    """
+
+    BAND_HEIGHT = 54
+    BAND_SPACING = 22
+    LABEL_WIDTH = 132
+    RIGHT_MARGIN = 8
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._days: list[str] = []
+        self._series: list[dict] = []
+        self._hover: int | None = None
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    # -- données ---------------------------------------------------------
+
+    def set_data(self, days: list[str], series: list[dict]) -> None:
+        """`series` : dicts {label, values, colour, unit} — unit formate la valeur."""
+        self._days = list(days)
+        # Une série entièrement vide n'apprend rien et volerait de la hauteur.
+        self._series = [s for s in series if any(v is not None for v in s["values"])]
+        self._hover = None
+        self.setMinimumHeight(
+            max(1, len(self._series)) * (self.BAND_HEIGHT + self.BAND_SPACING) + 8
+        )
+        self.updateGeometry()
+        self.update()
+
+    # -- interaction -----------------------------------------------------
+
+    def _index_at(self, x: float) -> int | None:
+        if len(self._days) < 2:
+            return None
+        left, width = self.LABEL_WIDTH, self._plot_width()
+        if width <= 0:
+            return None
+        ratio = (x - left) / width
+        index = round(ratio * (len(self._days) - 1))
+        return min(max(index, 0), len(self._days) - 1)
+
+    def _plot_width(self) -> float:
+        return self.width() - self.LABEL_WIDTH - self.RIGHT_MARGIN
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        index = self._index_at(event.position().x())
+        if index != self._hover:
+            self._hover = index
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        self._hover = None
+        self.update()
+
+    # -- rendu -----------------------------------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
+        if not self._series or len(self._days) < 2:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(self.font())
+        metrics = QFontMetrics(self.font())
+        width = self._plot_width()
+        step = width / (len(self._days) - 1)
+
+        for rank, serie in enumerate(self._series):
+            top = rank * (self.BAND_HEIGHT + self.BAND_SPACING) + self.BAND_SPACING
+            self._paint_band(painter, metrics, serie, top, step)
+
+        if self._hover is not None:
+            self._paint_cursor(painter, metrics, step)
+        painter.end()
+
+    def _paint_band(self, painter, metrics, serie, top, step) -> None:
+        values = serie["values"]
+        known = [v for v in values if v is not None]
+        low, high = min(known), max(known)
+        span = (high - low) or 1.0
+        height = self.BAND_HEIGHT
+
+        def y_of(value: float) -> float:
+            return top + height - ((value - low) / span) * height
+
+        # Titre de la bande, et bornes réelles à droite : sans elles, une
+        # courbe plate et une courbe agitée se ressemblent.
+        painter.setPen(QColor(theme.MUTED))
+        painter.drawText(0, int(top) + metrics.ascent() - 14, serie["label"])
+        unit = serie["unit"]
+        painter.drawText(
+            0, int(top) + metrics.ascent() + 2, f"{unit(high)} max"
+        )
+        painter.drawText(
+            0, int(top) + height, f"{unit(low)} min"
+        )
+
+        # Repères horizontaux discrets : ils donnent l'échelle sans encombrer.
+        grid = QPen(QColor(theme.BORDER))
+        grid.setWidthF(1.0)
+        painter.setPen(grid)
+        droite = int(self.width() - self.RIGHT_MARGIN)
+        for fraction in (0.0, 0.5, 1.0):
+            y = int(top + height * fraction)
+            painter.drawLine(self.LABEL_WIDTH, y, droite, y)
+
+        path = QPainterPath()
+        started = False
+        for index, value in enumerate(values):
+            if value is None:
+                # Une coupure ne doit pas être reliée : le trait suggérerait
+                # une mesure qui n'existe pas.
+                started = False
+                continue
+            x = self.LABEL_WIDTH + index * step
+            y = y_of(value)
+            if started:
+                path.lineTo(x, y)
+            else:
+                path.moveTo(x, y)
+                started = True
+
+        pen = QPen(QColor(serie["colour"]))
+        pen.setWidthF(2.0)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawPath(path)
+
+        if self._hover is not None and self._hover < len(values):
+            value = values[self._hover]
+            if value is not None:
+                painter.setBrush(QColor(serie["colour"]))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(
+                    QRectF(self.LABEL_WIDTH + self._hover * step - 3.5, y_of(value) - 3.5, 7, 7)
+                )
+
+    def _paint_cursor(self, painter, metrics, step) -> None:
+        x = self.LABEL_WIDTH + self._hover * step
+        pen = QPen(QColor(theme.MUTED))
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(int(x), 4, int(x), self.height() - 4)
+
+        lignes = [self._pretty_day(self._days[self._hover])]
+        for serie in self._series:
+            value = serie["values"][self._hover] if self._hover < len(serie["values"]) else None
+            texte = serie["unit"](value) if value is not None else "—"
+            lignes.append(f"{serie['label']} : {texte}")
+
+        largeur = max(metrics.horizontalAdvance(t) for t in lignes) + 18
+        hauteur = len(lignes) * (metrics.height() + 2) + 12
+        # L'encart bascule à gauche du curseur quand il déborderait du cadre.
+        gauche = x + 12
+        if gauche + largeur > self.width():
+            gauche = x - largeur - 12
+        haut = 6
+
+        painter.setPen(QColor(theme.BORDER))
+        painter.setBrush(QColor(theme.BG))
+        painter.drawRoundedRect(QRectF(gauche, haut, largeur, hauteur), 6, 6)
+
+        y = haut + metrics.ascent() + 6
+        for rank, texte in enumerate(lignes):
+            painter.setPen(QColor(theme.TEXT if rank == 0 else theme.MUTED))
+            painter.drawText(int(gauche + 9), int(y), texte)
+            y += metrics.height() + 2
+
+    @staticmethod
+    def _pretty_day(iso: str) -> str:
+        try:
+            jour = dt.date.fromisoformat(iso[:10])
+        except ValueError:
+            return iso
+        return format_relative_day(jour)

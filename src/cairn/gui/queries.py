@@ -117,6 +117,11 @@ class Recovery:
     sleep_duration_s: int | None = None
     body_battery: int | None = None
     readiness: int | None = None
+    # Dates de la série, indispensables pour dire de quel jour on parle quand
+    # l'utilisateur pointe un endroit du graphe.
+    days: list[str] = field(default_factory=list)
+    sleep_series: list[float | None] = field(default_factory=list)
+    battery_series: list[float | None] = field(default_factory=list)
 
 
 def recovery(days: int = 30) -> Recovery:
@@ -144,8 +149,11 @@ def recovery(days: int = 30) -> Recovery:
         return Recovery()
 
     result = Recovery(
+        days=[str(r["day"]) for r in rows],
         hrv_series=[r["avg_hrv_ms"] for r in rows],
         rhr_series=[r["resting_hr"] for r in rows],
+        sleep_series=[r["duration_s"] for r in rows],
+        battery_series=[r["body_battery_high"] for r in rows],
     )
     # La journée en cours est souvent incomplète : on affiche la dernière
     # mesure réellement disponible plutôt qu'une case vide.
@@ -180,6 +188,7 @@ class Load:
     previous_week_load: float = 0.0
     month_load: float = 0.0
     daily_series: list[float | None] = field(default_factory=list)
+    days: list[str] = field(default_factory=list)
 
     @property
     def trend_pct(self) -> float | None:
@@ -232,7 +241,10 @@ def load(days: int = 30) -> Load:
         """
     )
 
-    result = Load(daily_series=[float(r["load"] or 0) for r in series])
+    result = Load(
+        daily_series=[float(r["load"] or 0) for r in series],
+        days=[str(r["day"]) for r in series],
+    )
     if totals:
         row = totals[0]
         result.week_sessions = row["sessions"]
