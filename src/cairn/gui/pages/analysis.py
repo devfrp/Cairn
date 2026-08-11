@@ -93,6 +93,13 @@ class AnalysisPage(QWidget):
         self.weekly.layout().addWidget(self.weekly_chart)
         layout.addWidget(self.weekly)
 
+        self.gear = self._card(
+            "Usure du matériel",
+            "Le kilométrage vient de Strava ; l'usure se compte depuis la "
+            "pose de chaque pièce.",
+        )
+        layout.addWidget(self.gear)
+
         layout.addStretch(1)
         self._health = queries.Health()
 
@@ -123,6 +130,49 @@ class AnalysisPage(QWidget):
         self._fill_zones(queries.zone_distribution(days))
         self._fill_sports(queries.sport_breakdown(days))
         self._fill_weekly(queries.weekly_load(days))
+        # L'usure ne dépend pas de la période choisie : elle se compte depuis
+        # la pose de la pièce, pas sur les trente derniers jours.
+        self._fill_gear()
+
+    def _fill_gear(self) -> None:
+        """Une carte par matériel, ses pièces et leur usure."""
+        from cairn.gui.pages.gear import GearCard
+
+        disposition = self.gear.layout()
+        # La carte se reconstruit à chaque passage : les pièces changent, et
+        # recalculer une usure sur des widgets existants coûterait plus de
+        # code que d'en refaire.
+        while disposition.count() > 2:
+            element = disposition.takeAt(2)
+            if element.widget():
+                element.widget().deleteLater()
+
+        lignes = queries.gear_wear()
+        par_materiel: dict[int, list[dict]] = {}
+        materiels: dict[int, dict] = {}
+        for ligne in lignes:
+            ligne = dict(ligne)
+            materiels.setdefault(ligne["id"], ligne)
+            if ligne.get("component_id"):
+                par_materiel.setdefault(ligne["id"], []).append(ligne)
+
+        if not materiels:
+            vide = QLabel(
+                "Aucun matériel. Strava en fournit la liste : reliez le compte "
+                "et lancez une synchronisation."
+            )
+            vide.setObjectName("CardHint")
+            vide.setWordWrap(True)
+            disposition.addWidget(vide)
+            return
+
+        for identifiant, materiel in materiels.items():
+            disposition.addWidget(
+                GearCard(materiel, par_materiel.get(identifiant, []), self._reload_gear)
+            )
+
+    def _reload_gear(self) -> None:
+        self._fill_gear()
 
     def _fill_zones(self, rows: list[dict]) -> None:
         if not rows:

@@ -433,3 +433,82 @@ class TestLecturesDuTableauDeBord:
 
         assert recuperation.sleep_score is None
         assert recuperation.sleep_duration_s == 28800
+
+
+class TestUsureDuMateriel:
+    """Une chaîne se change tous les trois mille kilomètres, pas le vélo.
+
+    Strava tient le kilométrage du matériel ; ce qui manque partout, c'est le
+    compte par pièce. La vue `v_gear_wear` existait depuis le début mais ne
+    renvoyait rien : aucune pièce n'était déclarable.
+    """
+
+    @pytest.fixture
+    def velo(self, base):
+        with db.connection() as conn:
+            athlete = repo.get_or_create_athlete(conn, display_name="Test")
+            return repo.upsert_gear(conn, athlete, {
+                "strava_gear_id": "b1", "kind": "bike", "name": "Nomad",
+                "brand": None, "model": None, "frame_type": "mtb",
+                "is_primary": True, "retired": False, "distance_m": 5_000_000,
+            })
+
+    def test_piece_posee_au_kilometrage_du_jour(self, velo):
+        from cairn.gui import queries
+
+        queries.add_gear_component(velo, "chain", "XT", 3_000_000)
+
+        pieces = [dict(r) for r in queries.gear_wear() if dict(r).get("component_id")]
+        assert len(pieces) == 1
+        # Posée aujourd'hui : rien de parcouru depuis.
+        assert pieces[0]["since_install_m"] == 0
+        assert pieces[0]["label"] == "XT"
+
+    def test_usure_comptee_depuis_la_pose(self, velo):
+        from cairn.gui import queries
+
+        queries.add_gear_component(velo, "chain", None, 3_000_000)
+        # Le vélo roule mille kilomètres de plus.
+        db.execute("UPDATE gear SET distance_m = 6000000 WHERE id = ?", (velo,))
+
+        piece = next(dict(r) for r in queries.gear_wear() if dict(r).get("component_id"))
+        assert piece["since_install_m"] == 1_000_000
+        usure = 100 * piece["since_install_m"] / piece["service_interval_m"]
+        assert usure == pytest.approx(33.3, abs=0.1)
+
+    def test_remplacement_archive_lancienne(self, velo):
+        """L'historique doit dire combien de chaînes ont tenu combien."""
+        from cairn.gui import queries
+
+        queries.add_gear_component(velo, "chain", "XT", 3_000_000)
+        ancienne = next(
+            dict(r)["component_id"] for r in queries.gear_wear() if dict(r).get("component_id")
+        )
+        db.execute("UPDATE gear SET distance_m = 8000000 WHERE id = ?", (velo,))
+
+        queries.replace_gear_component(ancienne)
+
+        actives = [dict(r) for r in queries.gear_wear() if dict(r).get("component_id")]
+        assert len(actives) == 1, "une seule pièce active à la fois"
+        assert actives[0]["component_id"] != ancienne
+        assert actives[0]["since_install_m"] == 0
+        assert actives[0]["service_interval_m"] == 3_000_000, "réglages repris"
+        # L'ancienne est archivée, pas supprimée.
+        total = db.fetch_one("SELECT count(*) AS n FROM gear_component")["n"]
+        assert total == 2
+
+    def test_materiel_sans_piece_reste_liste(self, velo):
+        """Un vélo sans pièce suivie doit tout de même apparaître."""
+        from cairn.gui import queries
+
+        lignes = [dict(r) for r in queries.gear_wear()]
+        assert len(lignes) == 1
+        assert lignes[0]["component_id"] is None
+        assert lignes[0]["distance_m"] == 5_000_000
+
+    def test_remplacer_une_piece_inconnue_ne_fait_rien(self, velo):
+        from cairn.gui import queries
+
+        queries.replace_gear_component(9999)
+
+        assert db.fetch_one("SELECT count(*) AS n FROM gear_component")["n"] == 0

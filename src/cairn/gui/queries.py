@@ -512,3 +512,75 @@ def _elapsed_label(seconds: float | None) -> str:
         return "—"
     total = int(seconds)
     return f"{total // 3600}:{total % 3600 // 60:02d}"
+
+
+def gear_wear() -> list[dict[str, Any]]:
+    """Matériel suivi, avec l'usure de chaque pièce déclarée.
+
+    Le kilométrage vient de Strava, qui le tient à jour ; l'usure se compte
+    depuis la pose de la pièce, pas depuis l'achat du vélo.
+    """
+    return _safe(
+        """
+        SELECT g.id, g.name, g.kind, g.distance_m, g.retired,
+               c.id AS component_id, c.kind AS component_kind, c.label,
+               c.installed_at_gear_m, c.service_interval_m,
+               g.distance_m - c.installed_at_gear_m AS since_install_m
+          FROM gear g
+          LEFT JOIN gear_component c
+                 ON c.gear_id = g.id AND c.removed_on IS NULL
+         ORDER BY g.retired, g.name, c.kind
+        """
+    )
+
+
+def add_gear_component(
+    gear_id: int, kind: str, label: str | None, interval_m: float | None
+) -> None:
+    """Déclare une pièce, posée au kilométrage actuel du matériel."""
+    from cairn.db import execute
+
+    execute(
+        """
+        INSERT INTO gear_component (gear_id, kind, label, installed_on,
+                                    installed_at_gear_m, service_interval_m)
+        SELECT id, ?, ?, date('now', 'localtime'), coalesce(distance_m, 0), ?
+          FROM gear WHERE id = ?
+        """,
+        (kind, label, interval_m, gear_id),
+    )
+
+
+def replace_gear_component(component_id: int) -> None:
+    """Retire une pièce et en pose une neuve, mêmes réglages.
+
+    Changer une chaîne ne doit pas obliger à ressaisir son intervalle : on
+    archive l'ancienne — l'historique d'usure garde ainsi une trace — et on
+    repart du kilométrage du jour.
+    """
+    from cairn.db import connection
+
+    with connection() as conn:
+        ligne = conn.execute(
+            "SELECT gear_id, kind, label, service_interval_m FROM gear_component "
+            "WHERE id = ?",
+            (component_id,),
+        ).fetchone()
+        if ligne is None:
+            return
+        conn.execute(
+            "UPDATE gear_component SET removed_on = date('now', 'localtime') WHERE id = ?",
+            (component_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO gear_component (gear_id, kind, label, installed_on,
+                                        installed_at_gear_m, service_interval_m)
+            SELECT ?, ?, ?, date('now', 'localtime'), coalesce(distance_m, 0), ?
+              FROM gear WHERE id = ?
+            """,
+            (
+                ligne["gear_id"], ligne["kind"], ligne["label"],
+                ligne["service_interval_m"], ligne["gear_id"],
+            ),
+        )
