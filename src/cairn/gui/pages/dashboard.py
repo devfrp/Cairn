@@ -86,9 +86,26 @@ class DashboardPage(QWidget):
 
         # --- tendances ---
         trends = Card()
-        trend_title = QLabel("Tendances sur 30 jours")
+        entete = QHBoxLayout()
+        trend_title = QLabel("Tendances")
         trend_title.setObjectName("SectionTitle")
-        trends.layout().addWidget(trend_title)
+        entete.addWidget(trend_title)
+        entete.addStretch(1)
+
+        # Sur trente jours les points se serrent au point de masquer une nuit
+        # blanche isolée ; sur sept, chacun se lit. Le choix revient donc à
+        # l'utilisateur plutôt qu'à une constante.
+        self._trend_days = 30
+        self._period_buttons = {}
+        for libelle, jours in (("7 j", 7), ("30 j", 30), ("90 j", 90), ("1 an", 365)):
+            bouton = QPushButton(libelle)
+            bouton.setCheckable(True)
+            bouton.setChecked(jours == self._trend_days)
+            bouton.setCursor(Qt.CursorShape.PointingHandCursor)
+            bouton.clicked.connect(lambda _=False, d=jours: self._set_trend_days(d))
+            self._period_buttons[jours] = bouton
+            entete.addWidget(bouton)
+        trends.layout().addLayout(entete)
 
         hint = QLabel("Survolez le graphe pour lire une journée en détail.")
         hint.setObjectName("CardHint")
@@ -227,14 +244,21 @@ class DashboardPage(QWidget):
 
     # -----------------------------------------------------------------
 
+    def _set_trend_days(self, jours: int) -> None:
+        """Change la fenêtre du graphe et redemande les séries."""
+        self._trend_days = jours
+        for valeur, bouton in self._period_buttons.items():
+            bouton.setChecked(valeur == jours)
+        self.refresh(queries.probe())
+
     def refresh(self, health: queries.Health) -> None:
         if not health.usable:
             self._show_unavailable(health)
             return
 
         self.empty_notice.hide()
-        recovery = queries.recovery()
-        load = queries.load()
+        recovery = queries.recovery(self._trend_days)
+        load = queries.load(self._trend_days)
 
         self._fill_recovery(recovery)
         self._fill_load(load)

@@ -381,10 +381,11 @@ class TrendChart(QWidget):
     superposent pas — d'où une bande par mesure plutôt qu'un axe commun.
     """
 
-    BAND_HEIGHT = 54
-    BAND_SPACING = 22
+    BAND_HEIGHT = 82
+    BAND_SPACING = 26
     LABEL_WIDTH = 132
-    RIGHT_MARGIN = 8
+    RIGHT_MARGIN = 12
+    AXIS_HEIGHT = 22
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -403,7 +404,9 @@ class TrendChart(QWidget):
         self._series = [s for s in series if any(v is not None for v in s["values"])]
         self._hover = None
         self.setMinimumHeight(
-            max(1, len(self._series)) * (self.BAND_HEIGHT + self.BAND_SPACING) + 8
+            max(1, len(self._series)) * (self.BAND_HEIGHT + self.BAND_SPACING)
+            + self.AXIS_HEIGHT
+            + 8
         )
         self.updateGeometry()
         self.update()
@@ -450,9 +453,31 @@ class TrendChart(QWidget):
             top = rank * (self.BAND_HEIGHT + self.BAND_SPACING) + self.BAND_SPACING
             self._paint_band(painter, metrics, serie, top, step)
 
+        self._paint_time_axis(painter, metrics, step)
         if self._hover is not None:
             self._paint_cursor(painter, metrics, step)
         painter.end()
+
+    def _paint_time_axis(self, painter, metrics, step) -> None:
+        """Dates sous la dernière bande.
+
+        Sans elles, il fallait survoler chaque point pour savoir de quand on
+        parle — impossible de situer un creux d'un coup d'œil.
+        """
+        base = len(self._series) * (self.BAND_HEIGHT + self.BAND_SPACING) + 6
+        largeur_date = metrics.horizontalAdvance("00/00") + 18
+        maximum = max(2, int(self._plot_width() // largeur_date))
+        pas = max(1, -(-len(self._days) // maximum))
+
+        painter.setPen(QColor(theme.MUTED))
+        for index in range(0, len(self._days), pas):
+            x = self.LABEL_WIDTH + index * step
+            texte = self._short_day(self._days[index])
+            painter.drawText(
+                int(x - metrics.horizontalAdvance(texte) / 2),
+                int(base + metrics.ascent()),
+                texte,
+            )
 
     def _paint_band(self, painter, metrics, serie, top, step) -> None:
         values = serie["values"]
@@ -464,26 +489,24 @@ class TrendChart(QWidget):
         def y_of(value: float) -> float:
             return top + height - ((value - low) / span) * height
 
-        # Titre de la bande, et bornes réelles à droite : sans elles, une
-        # courbe plate et une courbe agitée se ressemblent.
-        painter.setPen(QColor(theme.MUTED))
-        painter.drawText(0, int(top) + metrics.ascent() - 14, serie["label"])
         unit = serie["unit"]
-        painter.drawText(
-            0, int(top) + metrics.ascent() + 2, f"{unit(high)} max"
-        )
-        painter.drawText(
-            0, int(top) + height, f"{unit(low)} min"
-        )
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(0, int(top) + metrics.ascent() - 16, serie["label"])
 
-        # Repères horizontaux discrets : ils donnent l'échelle sans encombrer.
-        grid = QPen(QColor(theme.BORDER))
-        grid.setWidthF(1.0)
-        painter.setPen(grid)
+        # Trois graduations chiffrées plutôt que deux bornes : le milieu donne
+        # l'échelle, et une courbe plate cesse de ressembler à une agitée.
         droite = int(self.width() - self.RIGHT_MARGIN)
         for fraction in (0.0, 0.5, 1.0):
             y = int(top + height * fraction)
+            valeur = high - (high - low) * fraction
+            grid = QPen(QColor(theme.BORDER))
+            grid.setWidthF(1.0)
+            if fraction == 0.5:
+                grid.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(grid)
             painter.drawLine(self.LABEL_WIDTH, y, droite, y)
+            painter.setPen(QColor(theme.MUTED))
+            painter.drawText(0, y + metrics.ascent() // 2 - 1, unit(valeur))
 
         path = QPainterPath()
         started = False
@@ -548,6 +571,13 @@ class TrendChart(QWidget):
             painter.setPen(QColor(theme.TEXT if rank == 0 else theme.MUTED))
             painter.drawText(int(gauche + 9), int(y), texte)
             y += metrics.height() + 2
+
+    @staticmethod
+    def _short_day(iso: str) -> str:
+        try:
+            return dt.date.fromisoformat(iso[:10]).strftime("%d/%m")
+        except ValueError:
+            return iso
 
     @staticmethod
     def _pretty_day(iso: str) -> str:

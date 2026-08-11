@@ -285,3 +285,41 @@ class TestGraphiqueDeTendances:
 
         assert "2026" not in TrendChart._pretty_day("2026-08-11") or True
         assert TrendChart._pretty_day("pas une date") == "pas une date"
+
+    def test_dates_de_laxe_abregees(self, qt_app):
+        from cairn.gui.widgets import TrendChart
+
+        assert TrendChart._short_day("2026-08-11") == "11/08"
+        assert TrendChart._short_day("bancal") == "bancal"
+
+    def test_hauteur_reserve_laxe(self, qt_app):
+        """Sans réserve, les dates se peignaient hors du cadre."""
+        chart = self.chart(qt_app)
+        chart.set_data(["a", "b"], [self.serie("une", [1, 2])])
+
+        attendu = chart.BAND_HEIGHT + chart.BAND_SPACING + chart.AXIS_HEIGHT + 8
+        assert chart.minimumHeight() == attendu
+
+
+class TestPeriodeDuGraphe:
+    """Sur trente jours, un creux d'une nuit disparaît dans la masse."""
+
+    def test_changer_de_periode_redemande_les_series(self, qt_app, monkeypatch):
+        from cairn.gui import queries
+        from cairn.gui.pages.dashboard import DashboardPage
+
+        demandes = []
+        monkeypatch.setattr(
+            queries, "recovery", lambda jours=30: demandes.append(jours) or queries.Recovery()
+        )
+        monkeypatch.setattr(queries, "load", lambda jours=30: queries.Load())
+        monkeypatch.setattr(queries, "fitness", lambda: queries.Fitness())
+        monkeypatch.setattr(queries, "active_flags", lambda: [])
+        monkeypatch.setattr(queries, "probe", lambda: queries.Health(reachable=True, migrated=True))
+
+        page = DashboardPage()
+        page._set_trend_days(7)
+
+        assert demandes[-1] == 7
+        assert page._period_buttons[7].isChecked()
+        assert not page._period_buttons[30].isChecked()
