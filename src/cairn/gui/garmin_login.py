@@ -18,8 +18,12 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import QUrl
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtWebEngineCore import (
+    QWebEnginePage,
+    QWebEngineProfile,
+    QWebEngineUrlRequestInterceptor,
+)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDialog,
@@ -58,6 +62,27 @@ def service_of(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
+class TicketInterceptor(QWebEngineUrlRequestInterceptor):
+    """Guette le ticket dans toutes les requêtes, pas seulement les navigations.
+
+    Garmin ne redirige pas le navigateur vers l'adresse de service : sa page
+    de succès l'appelle en arrière-plan, en JSONP. Le ticket ne passe donc
+    jamais par la barre d'adresse, et surveiller les changements d'adresse
+    n'en voyait aucun — l'appel échoue d'ailleurs, l'adresse en question
+    n'étant pas une vraie page.
+    """
+
+    found = Signal(str, str)
+
+    def interceptRequest(self, info) -> None:  # noqa: N802 — signature Qt
+        # Appelé depuis un fil du moteur de rendu : on se contente d'émettre,
+        # la connexion en file d'attente ramène le travail au fil principal.
+        url = info.requestUrl().toString()
+        ticket = extract_ticket(url)
+        if ticket:
+            self.found.emit(ticket, service_of(url))
+
+
 class GarminLoginDialog(QDialog):
     """Connexion Garmin dans une fenêtre de navigateur intégrée."""
 
@@ -92,9 +117,20 @@ class GarminLoginDialog(QDialog):
         self._page = QWebEnginePage(self._profile, self._profile)
         self.view.setPage(self._page)
         self.view.urlChanged.connect(self._on_url)
+
+        # Deux guetteurs pour un même ticket : selon le chemin suivi par
+        # Garmin, il arrive par une redirection ou par un appel de fond.
+        self._interceptor = TicketInterceptor(self)
+        self._interceptor.found.connect(self._on_ticket, Qt.ConnectionType.QueuedConnection)
+        self._profile.setUrlRequestInterceptor(self._interceptor)
+
         layout.addWidget(self.view, 1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox()
+        annuler = buttons.addButton(
+            "Annuler", QDialogButtonBox.ButtonRole.RejectRole
+        )
+        annuler.setCursor(Qt.CursorShape.PointingHandCursor)
         buttons.rejected.connect(self.reject)
         buttons.setContentsMargins(14, 8, 14, 12)
         layout.addWidget(buttons)
@@ -104,12 +140,16 @@ class GarminLoginDialog(QDialog):
     def _on_url(self, url: QUrl) -> None:
         raw = url.toString()
         ticket = extract_ticket(raw)
-        if ticket is None:
+        if ticket is not None:
+            self._on_ticket(ticket, service_of(raw))
+
+    def _on_ticket(self, ticket: str, service: str) -> None:
+        # Les deux guetteurs peuvent tirer sur le même ticket : le premier
+        # arrivé gagne, le second ne doit pas refermer une fenêtre déjà close.
+        if self.ticket is not None:
             return
-        # Intercepté au changement d'adresse, donc avant que le navigateur ne
-        # tente de charger une page qui n'existe pas.
         self.ticket = ticket
-        self.service = service_of(raw)
+        self.service = service
         self.view.stop()
         self.accept()
 
