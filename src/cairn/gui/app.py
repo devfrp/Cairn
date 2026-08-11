@@ -166,7 +166,9 @@ class MainWindow(QMainWindow):
         if self._probe is not None:
             return
 
-        probe = Worker(queries.probe, self)
+        # `ensure_schema` et non `probe` : une base neuve s'installe d'elle-même
+        # au premier passage, sans quoi tout le reste refuse de démarrer.
+        probe = Worker(queries.ensure_schema, self)
         self._probe = probe
         probe.succeeded.connect(self._apply_health)
         probe.failed.connect(
@@ -242,6 +244,11 @@ def check_webengine() -> str | None:
     La page est écrite en dur, sans accès au réseau : on vérifie le moteur,
     pas la disponibilité de Garmin.
     """
+    # Toujours hors écran : cette vérification tourne pendant la compilation,
+    # sur des machines sans affichage, et ne doit pas faire surgir de fenêtre
+    # chez qui la lance à la main. Elle ne peut donc pas éprouver une vraie
+    # surface d'affichage — c'est le rôle de `--garmin-login`, qui ouvre la
+    # fenêtre pour de bon quand on le demande.
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     # Les machines de compilation n'ont pas de carte graphique.
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
@@ -254,13 +261,17 @@ def check_webengine() -> str | None:
 
         prepare_webengine()
 
-        from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+        from PySide6.QtWebEngineWidgets import QWebEngineView
     except Exception as exc:  # noqa: BLE001 — paquet incomplet
         return f"{type(exc).__name__} : {exc}"
 
     app = QApplication.instance() or QApplication([])
-    profile = QWebEngineProfile()
-    page = QWebEnginePage(profile, profile)
+
+    # Une vue plutôt qu'une simple page : elle met en jeu la même mécanique
+    # que la fenêtre de connexion, widget compris. Sans être affichée, faute
+    # d'écran là où cette vérification tourne.
+    view = QWebEngineView()
+    view.resize(320, 240)
 
     outcome: dict[str, bool] = {}
 
@@ -268,19 +279,15 @@ def check_webengine() -> str | None:
         outcome["ok"] = ok
         QTimer.singleShot(0, app.quit)
 
-    page.loadFinished.connect(finished)
-    page.setHtml("<title>cairn</title><p>moteur de rendu opérationnel</p>")
+    view.loadFinished.connect(finished)
+    view.setHtml("<title>cairn</title><p>moteur de rendu opérationnel</p>")
     QTimer.singleShot(60_000, app.quit)
     app.exec()
 
-    # Qt exige que le profil survive à sa page, et se plaint bruyamment
-    # sinon — un avertissement qui parle de « troubles » à venir et qui n'a
-    # aucune raison de figurer dans les journaux de compilation. La boucle
-    # étant arrêtée, `deleteLater()` ne suffit pas : les destructions
-    # différées doivent être réclamées explicitement.
-    page.deleteLater()
+    # Qt se plaint bruyamment si la page survit à son profil ; la boucle étant
+    # arrêtée, les destructions différées doivent être réclamées à la main.
+    _KEEP_ALIVE.append(view)
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    _KEEP_ALIVE.append(profile)
 
     if not outcome.get("ok"):
         return "aucune page affichée en soixante secondes"
@@ -335,11 +342,49 @@ def selftest() -> int:
     return 0
 
 
+def garmin_login_only() -> int:
+    """Ouvre la seule fenêtre de connexion Garmin, puis sort.
+
+    Le reste de l'application n'est pas chargé. Sert à éprouver la fenêtre là
+    où elle casse — c'est-à-dire dans le paquet compilé, sur la machine de
+    l'utilisateur : l'auto-test, lui, se contente d'une page sans fenêtre et
+    laisse passer les pannes liées à l'affichage réel.
+    """
+    from cairn.gui.webengine import prepare_webengine
+
+    prepare_webengine()
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(theme.STYLESHEET)
+
+    from cairn.gui.garmin_login import GarminLoginDialog
+
+    _emit(f"plateforme : {app.platformName()}")
+    dialog = GarminLoginDialog(get_domain())
+    dialog.view.loadFinished.connect(
+        lambda ok: _emit(f"page chargée : {ok} — « {dialog.view.title()} »")
+    )
+    accepted = dialog.exec()
+    _emit(f"ticket : {dialog.ticket or 'aucun'}")
+    _emit(f"service : {dialog.service or '—'}")
+    return 0 if accepted else 1
+
+
+def get_domain() -> str:
+    prefs.apply_to_environment()
+    from cairn.config import get_settings
+
+    return get_settings().garmin_domain
+
+
 def main() -> int:
     """Point d'entrée de l'application graphique."""
 
     if "--selftest" in sys.argv:
         return selftest()
+
+    if "--garmin-login" in sys.argv:
+        return garmin_login_only()
 
     # Avant QApplication, impérativement : le moteur de rendu de la fenêtre de
     # connexion Garmin exige des réglages posés à ce moment-là.

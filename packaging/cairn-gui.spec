@@ -93,6 +93,26 @@ a = Analysis(
     noarchive=False,
 )
 
+# Bibliothèques à ne jamais emporter : elles doivent venir de la machine qui
+# exécute l'application, pas de celle qui l'a compilée.
+#
+# Elles dialoguent avec le pilote graphique et le serveur d'affichage. Compilée
+# sur Ubuntu, l'application emportait un `libgbm` et un `libxcb-glx` qui
+# prenaient le pas sur ceux de l'utilisateur : sur une machine au pilote plus
+# récent, Qt échouait à initialiser OpenGL et le processus était tué à
+# l'ouverture de la fenêtre de connexion Garmin. Rien de tout cela ne se voit à
+# la compilation, ni même sur la machine qui compile.
+DRIVER_COUPLED = (
+    "libGL.so", "libGLX", "libGLdispatch", "libOpenGL.so", "libEGL.so",
+    "libglapi.so", "libgbm.so", "libdrm.so", "libgallium",
+    "libxcb-glx.so", "libxcb-dri2.so", "libxcb-dri3.so", "libxcb-present.so",
+)
+
+_ecartees = [b for b in a.binaries if any(nom in b[0] for nom in DRIVER_COUPLED)]
+for nom, *_ in _ecartees:
+    print(f"[cairn] non embarqué (fourni par le système) : {nom}")
+a.binaries = [b for b in a.binaries if b not in _ecartees]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -135,7 +155,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Cairn",
             "CFBundleDisplayName": "Cairn",
-            "CFBundleShortVersionString": "0.1.1",
+            "CFBundleShortVersionString": "0.1.2",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
         },

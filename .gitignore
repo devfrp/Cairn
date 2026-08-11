@@ -27,3 +27,4 @@ dist-cli/
 
 # Moteur Ollama et modèle récupérés à la compilation
 packaging/vendor/
+cairn.db

@@ -1,6 +1,6 @@
 [project]
 name = "cairn"
-version = "0.1.1"
+version = "0.1.2"
 description = "Agrégation auto-hébergée des données Garmin et Strava"
 requires-python = ">=3.12"
 dependencies = [
