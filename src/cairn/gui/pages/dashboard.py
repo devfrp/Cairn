@@ -6,18 +6,24 @@ l'application affiche en premier.
 
 from __future__ import annotations
 
+import datetime as dt
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from cairn.gui import queries, theme
+from cairn.gui import prefs, queries, theme
 from cairn.gui.widgets import (
     Card,
     SectionHeader,
@@ -27,6 +33,7 @@ from cairn.gui.widgets import (
     format_distance,
     format_duration,
     format_elevation,
+    format_long_day,
     format_relative_day,
 )
 from cairn.gui.workers import Worker
@@ -35,6 +42,112 @@ from cairn.gui.workers import Worker
 # Au-delà de +30 %, la progression est plus rapide que ce qu'on conseille
 # habituellement ; en dessous de -30 %, c'est une semaine de coupure.
 LOAD_SURGE_PCT = 30.0
+
+
+# --- champs traçables -------------------------------------------------
+
+
+def _entier(v: float) -> str:
+    return f"{v:.0f}"
+
+
+def _signe(v: float) -> str:
+    return f"{v:+.0f}"
+
+
+def _bpm(v: float) -> str:
+    return f"{v:.0f} bpm"
+
+
+def _ms(v: float) -> str:
+    return f"{v:.0f} ms"
+
+
+def _minutes(v: float) -> str:
+    return f"{v:.0f} min"
+
+
+def _kcal(v: float) -> str:
+    return f"{v:.0f} kcal"
+
+
+def _par_minute(v: float) -> str:
+    return f"{v:.0f} /min"
+
+
+def _pas(v: float) -> str:
+    # Espace insécable entre les milliers : « 18 434 » se lit d'un coup,
+    # « 18434 » se compte.
+    return f"{v:,.0f}".replace(",", "\u00a0")
+
+
+# Les formats généraux rendent « — » pour une valeur nulle, ce qui convient à
+# une carte vide mais pas à une graduation : la borne basse d'une bande vaut
+# souvent zéro, et c'est alors zéro qu'il faut lire.
+def _duree(v: float) -> str:
+    return format_duration(v) if v else "0 min"
+
+
+def _distance(v: float) -> str:
+    return format_distance(v) if v else "0 km"
+
+
+@dataclass(frozen=True)
+class Champ:
+    """Une mesure traçable : d'où elle vient, comment elle s'écrit."""
+
+    key: str
+    label: str
+    groupe: str
+    colour: str
+    unit: Callable[[float], str]
+
+
+# Tout ce que la base sait tenir jour par jour. Le tableau de bord n'en montre
+# que cinq par défaut — au-delà, le graphe devient un mur — mais la montre en
+# relève bien plus, et il n'y a pas de raison de les garder inaccessibles.
+CHAMPS_JOUR: tuple[Champ, ...] = (
+    Champ("avg_hrv_ms", "Variabilité cardiaque", "Récupération", theme.SERIES[4], _ms),
+    Champ("resting_hr", "FC de repos", "Récupération", theme.SERIES[2], _bpm),
+    Champ("min_hr", "FC minimale", "Récupération", theme.SERIES[9], _bpm),
+    Champ("max_hr", "FC maximale", "Récupération", theme.SERIES[6], _bpm),
+    Champ("body_battery_high", "Body Battery (haut)", "Récupération", theme.SERIES[3], _entier),
+    Champ("body_battery_low", "Body Battery (bas)", "Récupération", theme.SERIES[8], _entier),
+    Champ("avg_stress", "Stress moyen", "Récupération", theme.SERIES[7], _entier),
+    Champ("max_stress", "Stress maximal", "Récupération", theme.DANGER, _entier),
+    Champ("avg_respiration", "Respiration", "Récupération", theme.SERIES[5], _par_minute),
+    Champ("sleep_s", "Sommeil", "Sommeil", theme.SERIES[1], _duree),
+    Champ("deep_s", "Sommeil profond", "Sommeil", theme.SERIES[5], _duree),
+    Champ("rem_s", "Sommeil paradoxal", "Sommeil", theme.SERIES[4], _duree),
+    Champ("light_s", "Sommeil léger", "Sommeil", theme.SERIES[9], _duree),
+    Champ("awake_s", "Éveils", "Sommeil", theme.SERIES[6], _duree),
+    Champ("sleep_hr", "FC nocturne moyenne", "Sommeil", theme.SERIES[2], _bpm),
+    Champ("sleep_low_hr", "FC nocturne minimale", "Sommeil", theme.SERIES[8], _bpm),
+    Champ("sleep_respiration", "Respiration nocturne", "Sommeil", theme.SERIES[7], _par_minute),
+    Champ("steps", "Pas", "Journée", theme.SERIES[1], _pas),
+    Champ("walk_distance_m", "Distance parcourue", "Journée", theme.SERIES[5], _distance),
+    Champ("calories_active", "Calories actives", "Journée", theme.SERIES[3], _kcal),
+    Champ("intensity_min", "Minutes d'intensité", "Journée", theme.SERIES[6], _minutes),
+    Champ("load", "Charge quotidienne", "Entraînement", theme.ACCENT, _entier),
+    Champ("sport_s", "Temps d'entraînement", "Entraînement", theme.SERIES[1], _duree),
+    Champ("sport_distance_m", "Distance à l'entraînement", "Entraînement",
+          theme.SERIES[2], _distance),
+    Champ("elevation_m", "Dénivelé", "Entraînement", theme.SERIES[8], format_elevation),
+    Champ("ctl", "Condition (CTL)", "Entraînement", theme.SERIES[5], _entier),
+    Champ("atl", "Fatigue (ATL)", "Entraînement", theme.SERIES[6], _entier),
+    Champ("tsb", "Forme (TSB)", "Entraînement", theme.SERIES[3], _signe),
+)
+
+# Sur une seule journée, seules les mesures relevées en continu ont du sens :
+# une durée de sommeil ne se trace pas minute par minute.
+CHAMPS_JOURNEE: tuple[Champ, ...] = (
+    Champ("hr", "Fréquence cardiaque", "Journée", theme.SERIES[2], _bpm),
+    Champ("stress", "Stress", "Journée", theme.SERIES[7], _entier),
+    Champ("body_battery", "Body Battery", "Journée", theme.SERIES[3], _entier),
+)
+
+DEFAUT_JOUR = ("avg_hrv_ms", "resting_hr", "sleep_s", "body_battery_high", "load")
+DEFAUT_JOURNEE = tuple(c.key for c in CHAMPS_JOURNEE)
 
 # Libellés courts des pièces, pour tenir sur une ligne d'alerte.
 PIECES_COURTES = {
@@ -54,6 +167,14 @@ class DashboardPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._summary_worker: Worker | None = None
+        self._metrics = queries.DailyMetrics()
+        self._intra = queries.Intraday()
+        # Jour affiché en vue « 1 j ». None : le dernier que la base connaisse.
+        self._jour: str | None = None
+        self._champs_jour = self._champs_retenus("champs_jour", CHAMPS_JOUR, DEFAUT_JOUR)
+        self._champs_journee = self._champs_retenus(
+            "champs_journee", CHAMPS_JOURNEE, DEFAUT_JOURNEE
+        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -97,37 +218,22 @@ class DashboardPage(QWidget):
             recovery_grid.addWidget(card, 0, index)
         layout.addLayout(recovery_grid)
 
+        # --- journée en cours ---
+        self.steps = StatCard("Pas")
+        self.stress = StatCard("Stress moyen")
+        self.calories = StatCard("Calories actives")
+        self.intensity = StatCard("Minutes d'intensité")
+
+        day_grid = QGridLayout()
+        day_grid.setSpacing(14)
+        for index, card in enumerate(
+            (self.steps, self.stress, self.calories, self.intensity)
+        ):
+            day_grid.addWidget(card, 0, index)
+        layout.addLayout(day_grid)
+
         # --- tendances ---
-        trends = Card()
-        entete = QHBoxLayout()
-        trend_title = QLabel("Tendances")
-        trend_title.setObjectName("SectionTitle")
-        entete.addWidget(trend_title)
-        entete.addStretch(1)
-
-        # Sur trente jours les points se serrent au point de masquer une nuit
-        # blanche isolée ; sur sept, chacun se lit. Le choix revient donc à
-        # l'utilisateur plutôt qu'à une constante.
-        self._trend_days = 30
-        self._period_buttons = {}
-        for libelle, jours in (("7 j", 7), ("30 j", 30), ("90 j", 90), ("1 an", 365)):
-            bouton = QPushButton(libelle)
-            bouton.setCheckable(True)
-            bouton.setChecked(jours == self._trend_days)
-            bouton.setCursor(Qt.CursorShape.PointingHandCursor)
-            bouton.clicked.connect(lambda _=False, d=jours: self._set_trend_days(d))
-            self._period_buttons[jours] = bouton
-            entete.addWidget(bouton)
-        trends.layout().addLayout(entete)
-
-        hint = QLabel("Survolez le graphe pour lire une journée en détail.")
-        hint.setObjectName("CardHint")
-        trends.layout().addWidget(hint)
-
-        self.trend_chart = TrendChart()
-        trends.layout().addWidget(self.trend_chart)
-
-        layout.addWidget(trends)
+        layout.addWidget(self._build_trends())
 
         # --- charge ---
         self.week_load = StatCard("Charge sur 7 jours")
@@ -165,6 +271,189 @@ class DashboardPage(QWidget):
         layout.addWidget(self.empty_notice)
 
         layout.addStretch(1)
+
+    # -- graphe de tendances -------------------------------------------
+
+    def _build_trends(self) -> Card:
+        trends = Card()
+
+        entete = QHBoxLayout()
+        titre = QLabel("Tendances")
+        titre.setObjectName("SectionTitle")
+        entete.addWidget(titre)
+        entete.addStretch(1)
+
+        # Le choix des mesures tracées appartient à l'utilisateur : elles sont
+        # une trentaine et personne n'a le même usage du même appareil.
+        self.btn_champs = QPushButton("Champs")
+        self.btn_champs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._menu_champs = QMenu(self)
+        self.btn_champs.setMenu(self._menu_champs)
+        entete.addWidget(self.btn_champs)
+
+        # Sur trente jours les points se serrent au point de masquer une nuit
+        # blanche isolée ; sur sept, chacun se lit ; sur une seule journée, la
+        # montre livre ses relevés de cinq minutes en cinq minutes. Le choix
+        # revient donc à l'utilisateur plutôt qu'à une constante.
+        self._trend_days = 30
+        self._period_buttons = {}
+        for libelle, jours in (("1 j", 1), ("7 j", 7), ("30 j", 30),
+                               ("90 j", 90), ("1 an", 365)):
+            bouton = QPushButton(libelle)
+            bouton.setCheckable(True)
+            bouton.setChecked(jours == self._trend_days)
+            bouton.setCursor(Qt.CursorShape.PointingHandCursor)
+            bouton.clicked.connect(lambda _=False, d=jours: self._set_trend_days(d))
+            self._period_buttons[jours] = bouton
+            entete.addWidget(bouton)
+        trends.layout().addLayout(entete)
+
+        # Navigation d'un jour à l'autre, propre à la vue « 1 j ».
+        self.day_bar = QWidget()
+        barre = QHBoxLayout(self.day_bar)
+        barre.setContentsMargins(0, 0, 0, 0)
+        barre.setSpacing(8)
+
+        self.btn_prev_day = QPushButton("◀")
+        self.btn_prev_day.setFixedWidth(38)
+        self.btn_prev_day.clicked.connect(lambda: self._shift_day(-1))
+        self.btn_next_day = QPushButton("▶")
+        self.btn_next_day.setFixedWidth(38)
+        self.btn_next_day.clicked.connect(lambda: self._shift_day(1))
+
+        self.day_label = QLabel("—")
+        self.day_label.setObjectName("SectionTitle")
+
+        barre.addWidget(self.btn_prev_day)
+        barre.addWidget(self.btn_next_day)
+        barre.addWidget(self.day_label)
+        barre.addStretch(1)
+        self.day_bar.hide()
+        trends.layout().addWidget(self.day_bar)
+
+        self.trend_hint = QLabel("")
+        self.trend_hint.setObjectName("CardHint")
+        trends.layout().addWidget(self.trend_hint)
+
+        self.trend_chart = TrendChart()
+        trends.layout().addWidget(self.trend_chart)
+
+        self._rebuild_field_menu()
+        return trends
+
+    def _catalogue(self) -> tuple[Champ, ...]:
+        return CHAMPS_JOURNEE if self._trend_days == 1 else CHAMPS_JOUR
+
+    def _selection(self) -> list[str]:
+        return self._champs_journee if self._trend_days == 1 else self._champs_jour
+
+    @staticmethod
+    def _champs_retenus(
+        cle: str, catalogue: tuple[Champ, ...], defaut: tuple[str, ...]
+    ) -> list[str]:
+        """Sélection persistée, filtrée sur ce que le catalogue connaît encore.
+
+        Une clé disparue d'une version à l'autre ne doit pas faire échouer le
+        chargement, seulement s'effacer.
+        """
+        connus = {c.key for c in catalogue}
+        stocke = [k for k in prefs.load_view(cle).split(",") if k in connus]
+        return stocke or list(defaut)
+
+    def _rebuild_field_menu(self) -> None:
+        """Reconstruit le menu : le catalogue change avec la période."""
+        self._menu_champs.clear()
+        selection = set(self._selection())
+        groupe_courant = ""
+        for champ in self._catalogue():
+            if champ.groupe != groupe_courant:
+                groupe_courant = champ.groupe
+                self._menu_champs.addSection(champ.groupe)
+            action = QAction(champ.label, self._menu_champs)
+            action.setCheckable(True)
+            action.setChecked(champ.key in selection)
+            action.toggled.connect(
+                lambda coche, k=champ.key: self._toggle_field(k, coche)
+            )
+            self._menu_champs.addAction(action)
+        self.btn_champs.setText(f"Champs ({len(selection)})")
+
+    def _toggle_field(self, key: str, coche: bool) -> None:
+        selection = self._selection()
+        if coche and key not in selection:
+            # L'ordre du catalogue fait foi : les bandes ne doivent pas se
+            # réordonner selon l'ordre où l'on a coché les cases.
+            ordre = [c.key for c in self._catalogue()]
+            selection.append(key)
+            selection.sort(key=ordre.index)
+        elif not coche and key in selection:
+            selection.remove(key)
+
+        cle = "champs_journee" if self._trend_days == 1 else "champs_jour"
+        prefs.save_view(cle, ",".join(selection))
+        self.btn_champs.setText(f"Champs ({len(selection)})")
+        self._render_chart()
+
+    def _shift_day(self, delta: int) -> None:
+        """Passe au jour voisin, sans sortir de la plage relevée."""
+        bornes = queries.intraday_bounds()
+        if not bornes["last_day"]:
+            return
+        premier = dt.date.fromisoformat(bornes["first_day"])
+        dernier = dt.date.fromisoformat(bornes["last_day"])
+        courant = dt.date.fromisoformat(self._jour or bornes["last_day"])
+        self._jour = min(max(courant + dt.timedelta(days=delta), premier), dernier).isoformat()
+        self._intra = queries.intraday(self._jour)
+        self._render_chart()
+
+    def _render_chart(self) -> None:
+        """Redessine à partir des séries déjà chargées, sans requête."""
+        catalogue = {c.key: c for c in self._catalogue()}
+        selection = self._selection()
+        source = self._intra if self._trend_days == 1 else self._metrics
+
+        series = [
+            {
+                "label": catalogue[key].label,
+                "values": source.get(key),
+                "colour": catalogue[key].colour,
+                "unit": catalogue[key].unit,
+            }
+            for key in selection
+            if key in catalogue and source.get(key)
+        ]
+
+        if self._trend_days == 1:
+            spans = [
+                {**span, "label": self._span_label(span)} for span in self._intra.spans
+            ]
+            self.trend_chart.set_data(self._intra.labels, series, mode="time", spans=spans)
+            self.day_label.setText(format_long_day(self._intra.day) if self._intra.day else "—")
+            self.trend_hint.setText(self._journee_hint())
+        else:
+            self.trend_chart.set_data(self._metrics.days, series)
+            self.trend_hint.setText(
+                "Survolez le graphe pour lire une journée en détail."
+                if series
+                else "Aucun champ sélectionné — choisissez une mesure dans « Champs »."
+            )
+
+    @staticmethod
+    def _span_label(span: dict) -> str:
+        duree = format_duration(span.get("duration_s"))
+        return f"{span['label']} · {duree}" if duree != "—" else str(span["label"])
+
+    def _journee_hint(self) -> str:
+        if not self._intra.day:
+            return "Aucun relevé continu dans la base pour l'instant."
+        nuits = sum(1 for s in self._intra.spans if s["kind"] == "sleep")
+        sorties = sum(1 for s in self._intra.spans if s["kind"] == "activity")
+        details = [f"{_pas(self._intra.readings)} relevés"]
+        if nuits:
+            details.append("sommeil ombré en violet")
+        if sorties:
+            details.append(f"{sorties} séance{'s' if sorties > 1 else ''} en orange")
+        return " · ".join(details) + " — survolez pour lire une minute précise."
 
     # -- résumé hebdomadaire -------------------------------------------
 
@@ -262,6 +551,9 @@ class DashboardPage(QWidget):
         self._trend_days = jours
         for valeur, bouton in self._period_buttons.items():
             bouton.setChecked(valeur == jours)
+        self.day_bar.setVisible(jours == 1)
+        # Le catalogue de mesures n'est pas le même d'une échelle à l'autre.
+        self._rebuild_field_menu()
         self.refresh(queries.probe())
 
     def refresh(self, health: queries.Health) -> None:
@@ -270,51 +562,23 @@ class DashboardPage(QWidget):
             return
 
         self.empty_notice.hide()
-        recovery = queries.recovery(self._trend_days)
-        load = queries.load(self._trend_days)
+        # Les cartes du haut donnent le dernier état connu : sur la vue d'une
+        # seule journée, une fenêtre d'un jour les viderait alors que rien
+        # n'a changé de leur côté.
+        fenetre = max(self._trend_days, 7)
+        recovery = queries.recovery(fenetre)
+        load = queries.load(fenetre)
 
         self._fill_recovery(recovery)
         self._fill_load(load)
         self._fill_fitness(queries.fitness())
         self._fill_signals(queries.active_flags())
 
-        # Chaque mesure garde son unité : mêlées sur un axe commun, des bpm et
-        # des heures ne voudraient rien dire.
-        self.trend_chart.set_data(
-            recovery.days or load.days,
-            [
-                {
-                    "label": "Variabilité cardiaque",
-                    "values": recovery.hrv_series,
-                    "colour": theme.SERIES[4],
-                    "unit": lambda v: f"{v:.0f} ms",
-                },
-                {
-                    "label": "FC de repos",
-                    "values": recovery.rhr_series,
-                    "colour": theme.SERIES[2],
-                    "unit": lambda v: f"{v:.0f} bpm",
-                },
-                {
-                    "label": "Sommeil",
-                    "values": recovery.sleep_series,
-                    "colour": theme.SERIES[1],
-                    "unit": lambda v: format_duration(int(v)),
-                },
-                {
-                    "label": "Body Battery",
-                    "values": recovery.battery_series,
-                    "colour": theme.SERIES[3],
-                    "unit": lambda v: f"{v:.0f}",
-                },
-                {
-                    "label": "Charge quotidienne",
-                    "values": load.daily_series,
-                    "colour": theme.ACCENT,
-                    "unit": lambda v: f"{v:.0f}",
-                },
-            ],
-        )
+        self._metrics = queries.daily_metrics(fenetre)
+        self._fill_day(self._metrics)
+        if self._trend_days == 1:
+            self._intra = queries.intraday(self._jour)
+        self._render_chart()
 
         if not any(v for v in load.daily_series) and recovery.hrv is None:
             self.empty_notice.setText(
@@ -322,6 +586,37 @@ class DashboardPage(QWidget):
                 "depuis l'onglet « Synchronisation »."
             )
             self.empty_notice.show()
+
+    @staticmethod
+    def _dernier(valeurs: list, jours: list[str]) -> tuple[float | None, str | None]:
+        """Dernière valeur réellement mesurée, et le jour d'où elle vient.
+
+        La journée en cours n'est remontée qu'en fin de synchronisation : sans
+        ce repli, quatre cartes resteraient vides toute la matinée.
+        """
+        for index in range(len(valeurs) - 1, -1, -1):
+            if valeurs[index] is not None:
+                jour = jours[index] if index < len(jours) else None
+                return valeurs[index], jour
+        return None, None
+
+    def _fill_day(self, metrics: queries.DailyMetrics) -> None:
+        """Dépense et tension du dernier jour relevé."""
+        cartes = (
+            (self.steps, "steps", _pas, "pas"),
+            (self.stress, "avg_stress", _entier, "sur 100"),
+            (self.calories, "calories_active", _kcal, "hors métabolisme de base"),
+            (self.intensity, "intensity_min", _minutes, "modérée et soutenue"),
+        )
+        for carte, cle, format_valeur, precision in cartes:
+            valeur, jour = self._dernier(metrics.get(cle), metrics.days)
+            if valeur is None:
+                carte.set_value("—", "Pas encore de mesure")
+                continue
+            detail = precision
+            if jour:
+                detail += f" · {format_relative_day(dt.date.fromisoformat(jour))}"
+            carte.set_value(format_valeur(valeur), detail)
 
     def _fill_recovery(self, recovery: queries.Recovery) -> None:
         if recovery.hrv is None:
@@ -474,11 +769,13 @@ class DashboardPage(QWidget):
     def _show_unavailable(self, health: queries.Health) -> None:
         self.signals_card.hide()
         for card in (self.hrv, self.sleep, self.rhr, self.battery,
+                     self.steps, self.stress, self.calories, self.intensity,
                      self.week_load, self.week_volume, self.week_elevation,
                      self.month_load, self.ctl, self.atl, self.tsb, self.acwr):
             card.set_value("—", "")
-        for spark in (self.hrv_spark, self.rhr_spark, self.load_spark):
-            spark.set_values([])
+        # Les courbes doivent disparaître avec les chiffres : laissées en
+        # place, elles donneraient à croire que la base répond encore.
+        self.trend_chart.set_data([], [])
 
         message = (
             "Base joignable, mais le schéma n'est pas installé. "

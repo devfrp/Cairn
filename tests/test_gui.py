@@ -289,16 +289,58 @@ class TestGraphiqueDeTendances:
         assert chart._index_at(5000) == 2
 
     def test_jour_affiche_en_clair(self, qt_app):
-        from cairn.gui.widgets import TrendChart
+        chart = self.chart(qt_app)
 
-        assert "2026" not in TrendChart._pretty_day("2026-08-11") or True
-        assert TrendChart._pretty_day("pas une date") == "pas une date"
+        assert chart._cursor_label("pas une date") == "pas une date"
 
     def test_dates_de_laxe_abregees(self, qt_app):
-        from cairn.gui.widgets import TrendChart
+        chart = self.chart(qt_app)
 
-        assert TrendChart._short_day("2026-08-11") == "11/08"
-        assert TrendChart._short_day("bancal") == "bancal"
+        assert chart._axis_label("2026-08-11") == "11/08"
+        assert chart._axis_label("bancal") == "bancal"
+
+    def test_axe_horaire_garde_lheure_telle_quelle(self, qt_app):
+        """En vue d'une journée, l'étiquette est déjà une heure."""
+        chart = self.chart(qt_app)
+        chart.set_data(["06:00", "06:05"], [self.serie("FC", [52, 54])], mode="time")
+
+        assert chart._axis_label("06:05") == "06:05"
+        assert chart._cursor_label("06:05") == "à 06 h 05"
+
+    def test_plages_ombrees_derriere_les_courbes(self, qt_app):
+        """La nuit doit se voir sans survoler le graphe."""
+        chart = self.chart(qt_app)
+        chart.set_data(
+            ["00:00", "00:05", "00:10", "00:15"],
+            [self.serie("FC", [52, 51, 50, 49])],
+            mode="time",
+            spans=[{"kind": "sleep", "label": "sommeil", "start": 0.0, "end": 2.0}],
+        )
+        chart.resize(600, chart.minimumHeight())
+
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage
+
+        image = QImage(QSize(chart.width(), chart.height()), QImage.Format.Format_ARGB32)
+        image.fill(0)
+        chart.render(image)
+
+        y = chart.BAND_SPACING - 4
+        dedans = image.pixelColor(chart.LABEL_WIDTH + 20, y).name()
+        dehors = image.pixelColor(chart.width() - 30, y).name()
+        assert dedans != dehors
+
+    def test_plages_bornees_a_laxe(self, qt_app):
+        """Une nuit commencée la veille ne doit pas déborder du cadre."""
+        chart = self.chart(qt_app)
+        chart.set_data(
+            ["00:00", "00:05"],
+            [self.serie("FC", [52, 51])],
+            mode="time",
+            spans=[{"kind": "sleep", "label": "", "start": 0.0, "end": 1.0}],
+        )
+
+        assert chart._spans[0]["end"] <= len(chart._days) - 1
 
     def test_hauteur_reserve_laxe(self, qt_app):
         """Sans réserve, les dates se peignaient hors du cadre."""
@@ -517,3 +559,316 @@ class TestDetailDUneSortie:
         assert _elapsed_label(0) == "0:00"
         assert _elapsed_label(3661) == "1:01"
         assert _elapsed_label(None) == "—"
+
+
+def _en_utc(local: dt.datetime) -> str:
+    """Instant local écrit tel que la base le stocke."""
+    return local.astimezone(dt.UTC).isoformat(sep=" ")
+
+
+class TestJourneeDetaillee:
+    """La montre relève toutes les deux minutes ; le graphe s'arrêtait au jour.
+
+    Une nuit hachée ou un pic de stress en réunion n'apparaissaient nulle
+    part : la moyenne quotidienne les avait déjà écrasés.
+    """
+
+    JOUR = dt.date(2026, 7, 1)
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        minuit = dt.datetime(2026, 7, 1).astimezone()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            # Les relevés sont stockés en UTC mais rangés par jour local : la
+            # fixture part donc de minuit local, sans quoi le décalage horaire
+            # de la machine déciderait du résultat.
+            for minute in range(0, 1440, 3):
+                heure = _en_utc(minuit + dt.timedelta(minutes=minute))
+                for metric, valeur in (("hr", 50 + minute % 40), ("stress", minute % 90),
+                                       ("body_battery", 5 + minute % 90)):
+                    conn.execute(
+                        "INSERT INTO wellness_reading (athlete_id, time, metric, value) "
+                        "VALUES (1, ?, ?, ?)",
+                        (heure, metric, float(valeur)),
+                    )
+            # Garmin code par -1 les instants où la mesure n'a pas abouti.
+            conn.execute(
+                "INSERT INTO wellness_reading (athlete_id, time, metric, value) "
+                "VALUES (1, ?, 'hr', -1.0)",
+                (_en_utc(minuit + dt.timedelta(hours=12, minutes=1)),),
+            )
+            conn.execute(
+                """INSERT INTO sleep_session (athlete_id, sleep_date, start_time,
+                                              end_time, duration_s)
+                   VALUES (1, '2026-07-01', ?, ?, 28800)""",
+                (_en_utc(minuit - dt.timedelta(hours=3)),
+                 _en_utc(minuit + dt.timedelta(hours=5))),
+            )
+            conn.execute(
+                """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                         local_date, sport, sport_family, elapsed_s,
+                                         primary_source, name)
+                   VALUES (1, 1, '2026-07-01T16:00:00+00:00', '2026-07-01 18:00:00',
+                           '2026-07-01', 'road', 'cycling', 3600, 'garmin', 'Sortie du soir')"""
+            )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_axe_couvre_la_journee_entiere(self, base):
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+
+        assert len(jour.labels) == 24 * 60 // queries.INTRADAY_BUCKET_MIN
+        assert jour.labels[0] == "00:00"
+        assert jour.labels[-1] == "23:55"
+
+    def test_cases_sans_releve_restent_vides(self, base):
+        """La montre retirée en cours de journée doit se voir comme un trou."""
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+        avant = sum(1 for v in jour.get("hr") if v is not None)
+
+        from cairn.db import execute
+
+        execute(
+            "DELETE FROM wellness_reading WHERE metric = 'hr' "
+            "AND CAST(strftime('%H', time, 'localtime') AS INTEGER) BETWEEN 10 AND 11"
+        )
+        apres = queries.intraday("2026-07-01")
+
+        assert avant > sum(1 for v in apres.get("hr") if v is not None)
+        assert any(v is None for v in apres.get("hr"))
+
+    def test_valeur_manquante_codee_negativement_ecartee(self, base):
+        """Un -1 laissé passer creuserait un puits au milieu de la courbe."""
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+
+        assert min(v for v in jour.get("hr") if v is not None) >= 0
+
+    def test_nuit_commencee_la_veille_rognee_a_minuit(self, base):
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+        nuits = [s for s in jour.spans if s["kind"] == "sleep"]
+
+        assert len(nuits) == 1
+        assert nuits[0]["start"] == 0.0
+        assert 0 < nuits[0]["end"] < len(jour.labels)
+
+    def test_seance_situee_sur_laxe(self, base):
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+        sorties = [s for s in jour.spans if s["kind"] == "activity"]
+
+        assert [s["label"] for s in sorties] == ["Sortie du soir"]
+        # Départ à 18 h locales, une heure durant : cases 216 à 228.
+        assert sorties[0]["start"] == pytest.approx(216.0)
+        assert sorties[0]["end"] == pytest.approx(228.0)
+
+    def test_bornes_des_jours_releves(self, base):
+        from cairn.gui import queries
+
+        bornes = queries.intraday_bounds()
+
+        assert bornes["first_day"] == "2026-07-01"
+        assert bornes["last_day"] == "2026-07-01"
+
+    def test_dernier_jour_par_defaut(self, base):
+        from cairn.gui import queries
+
+        assert queries.intraday().day == "2026-07-01"
+
+    def test_fenetre_utc_couvre_le_jour_local(self, base):
+        """Filtrer sur l'instant brut, sans quoi chaque clic coûte un scan.
+
+        La conversion en heure locale ligne par ligne empêche tout usage
+        d'index : sur cinq mois de relevés, une journée mettait presque deux
+        secondes à s'afficher.
+        """
+        from cairn.gui.queries import _local_day, _utc_window
+
+        debut, fin = _utc_window("2026-07-01")
+
+        assert _local_day(debut) == "2026-07-01"
+        # La borne haute est exclue : c'est déjà le lendemain.
+        assert _local_day(fin) == "2026-07-02"
+        assert debut < fin
+
+    def test_meme_journee_quel_que_soit_le_filtre(self, base):
+        """La fenêtre UTC doit rendre exactement ce que rendait la date locale."""
+        from cairn.db import fetch_all
+        from cairn.gui import queries
+
+        attendu = fetch_all(
+            "SELECT count(*) AS n FROM wellness_reading "
+            "WHERE date(time, 'localtime') = '2026-07-01'"
+        )[0]["n"]
+
+        assert queries.intraday("2026-07-01").readings == attendu
+
+    def test_base_sans_releve_ne_leve_pas(self, base):
+        from cairn.db import execute
+        from cairn.gui import queries
+
+        execute("DELETE FROM wellness_reading")
+
+        vide = queries.intraday()
+        assert vide.day == ""
+        assert vide.labels == []
+
+
+class TestMesuresQuotidiennes:
+    """Le tableau de bord n'exposait que cinq des trente mesures stockées."""
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        hier = dt.date.today() - dt.timedelta(days=1)
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            conn.execute(
+                """INSERT INTO daily_wellness (athlete_id, day, resting_hr, steps,
+                                               avg_stress, calories_active,
+                                               moderate_intensity_min,
+                                               vigorous_intensity_min)
+                   VALUES (1, ?, 47, 12000, 33, 780, 40, 15)""",
+                (hier,),
+            )
+            conn.execute(
+                """INSERT INTO sleep_session (athlete_id, sleep_date, duration_s, deep_s)
+                   VALUES (1, ?, 27000, 4200)""",
+                (hier,),
+            )
+        yield hier
+        db.close_pool()
+        reset_settings()
+
+    def test_calendrier_continu(self, base):
+        from cairn.gui import queries
+
+        mesures = queries.daily_metrics(7)
+
+        assert len(mesures.days) == 8
+        assert all(len(v) == 8 for v in mesures.series.values())
+
+    def test_champs_lus(self, base):
+        from cairn.gui import queries
+
+        mesures = queries.daily_metrics(7)
+        index = mesures.days.index(base.isoformat())
+
+        assert mesures.get("steps")[index] == 12000
+        assert mesures.get("deep_s")[index] == 4200
+        assert mesures.get("intensity_min")[index] == 55
+
+    def test_journee_absente_reste_vide(self, base):
+        """Zéro pas et pas de mesure ne veulent pas dire la même chose."""
+        from cairn.gui import queries
+
+        mesures = queries.daily_metrics(7)
+        veille = mesures.days.index((base - dt.timedelta(days=1)).isoformat())
+
+        assert mesures.get("steps")[veille] is None
+        assert mesures.get("intensity_min")[veille] is None
+        # La charge, elle, vaut bien zéro : un jour sans sortie est un repos.
+        assert mesures.get("load")[veille] == 0
+
+    def test_cle_inconnue_rend_une_liste_vide(self, base):
+        from cairn.gui import queries
+
+        assert queries.daily_metrics(7).get("inexistant") == []
+
+
+class TestChoixDesChamps:
+    """Trente mesures d'un côté, un graphe lisible de l'autre."""
+
+    @pytest.fixture
+    def page(self, qt_app, monkeypatch):
+        from cairn.gui import prefs, queries
+        from cairn.gui.pages.dashboard import DashboardPage
+
+        # Les préférences ne doivent pas fuir vers la configuration réelle.
+        memoire: dict[str, str] = {}
+        monkeypatch.setattr(prefs, "load_view", lambda k, d="": memoire.get(k, d))
+        monkeypatch.setattr(prefs, "save_view", lambda k, v: memoire.update({k: v}))
+        monkeypatch.setattr(queries, "probe", lambda: queries.Health())
+        return DashboardPage(), memoire
+
+    def test_defaut_reprend_les_cinq_mesures_historiques(self, page):
+        from cairn.gui.pages.dashboard import DEFAUT_JOUR
+
+        vue, _ = page
+
+        assert vue._selection() == list(DEFAUT_JOUR)
+
+    def test_cocher_respecte_lordre_du_catalogue(self, page):
+        """Sinon les bandes se réordonnent selon l'ordre des clics."""
+        from cairn.gui.pages.dashboard import CHAMPS_JOUR
+
+        vue, _ = page
+        vue._toggle_field("steps", True)
+        vue._toggle_field("min_hr", True)
+
+        ordre = [c.key for c in CHAMPS_JOUR]
+        assert vue._selection() == sorted(vue._selection(), key=ordre.index)
+
+    def test_selection_persistee(self, page):
+        vue, memoire = page
+        vue._toggle_field("steps", True)
+
+        assert "steps" in memoire["champs_jour"].split(",")
+
+    def test_cle_disparue_ignoree(self, qt_app, monkeypatch):
+        """Un champ retiré d'une version à l'autre ne doit rien casser."""
+        from cairn.gui import prefs
+        from cairn.gui.pages.dashboard import CHAMPS_JOUR, DEFAUT_JOUR, DashboardPage
+
+        monkeypatch.setattr(prefs, "load_view", lambda k, d="": "steps,champ_disparu")
+
+        retenus = DashboardPage._champs_retenus("champs_jour", CHAMPS_JOUR, DEFAUT_JOUR)
+
+        assert retenus == ["steps"]
+
+    def test_bouton_compte_les_champs(self, page):
+        vue, _ = page
+        vue._toggle_field("steps", True)
+
+        assert vue.btn_champs.text() == "Champs (6)"
+
+    def test_periode_dun_jour_change_de_catalogue(self, page):
+        from cairn.gui.pages.dashboard import CHAMPS_JOURNEE
+
+        vue, _ = page
+        vue._set_trend_days(1)
+
+        assert vue._catalogue() == CHAMPS_JOURNEE
+        assert not vue.day_bar.isHidden()
+
+    def test_retour_a_trente_jours_recache_la_navigation(self, page):
+        vue, _ = page
+        vue._set_trend_days(1)
+        vue._set_trend_days(30)
+
+        assert vue.day_bar.isHidden()

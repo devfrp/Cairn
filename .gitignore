@@ -28,3 +28,6 @@ dist-cli/
 # Moteur Ollama et modèle récupérés à la compilation
 packaging/vendor/
 cairn.db
+# Journaux WAL : SQLite les recrée à chaque ouverture.
+cairn.db-shm
+cairn.db-wal

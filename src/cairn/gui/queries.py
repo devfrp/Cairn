@@ -259,6 +259,276 @@ def load(days: int = 30) -> Load:
     return result
 
 
+@dataclass
+class DailyMetrics:
+    """Toutes les mesures quotidiennes disponibles, sur un calendrier commun.
+
+    Un seul calendrier pour toutes les séries : c'est ce qui permet au graphe
+    d'aligner un pic de charge sur la nuit qui a suivi. Les séries sont
+    rendues par clé plutôt que par attribut — le tableau de bord en propose
+    une vingtaine au choix, et autant de champs figés serait ingérable.
+    """
+
+    days: list[str] = field(default_factory=list)
+    series: dict[str, list[float | None]] = field(default_factory=dict)
+
+    def get(self, key: str) -> list[float | None]:
+        return self.series.get(key, [])
+
+
+def daily_metrics(days: int = 30) -> DailyMetrics:
+    """Récupération, sommeil, dépense et charge, jour par jour."""
+    rows = _safe(
+        """
+        WITH RECURSIVE calendar(day) AS (
+            SELECT date('now', 'localtime', ? || ' days')
+            UNION ALL
+            SELECT date(day, '+1 day') FROM calendar
+             WHERE day < date('now', 'localtime')
+        )
+        SELECT calendar.day AS day,
+               h.avg_hrv_ms, h.weekly_avg_ms,
+               w.resting_hr, w.min_hr, w.max_hr,
+               w.avg_stress, w.max_stress,
+               w.body_battery_high, w.body_battery_low,
+               w.body_battery_charged, w.body_battery_drained,
+               w.steps, w.distance_m AS walk_distance_m,
+               w.calories_active, w.avg_respiration,
+               -- Le calcul doit rester nul quand la journée est absente :
+               -- 0 + 0 afficherait un zéro là où rien n'a été mesuré.
+               CASE WHEN w.day IS NOT NULL
+                    THEN coalesce(w.moderate_intensity_min, 0)
+                       + coalesce(w.vigorous_intensity_min, 0) END AS intensity_min,
+               s.duration_s AS sleep_s, s.deep_s, s.rem_s, s.light_s, s.awake_s,
+               s.avg_hr AS sleep_hr, s.lowest_hr AS sleep_low_hr,
+               s.avg_respiration AS sleep_respiration,
+               (SELECT coalesce(sum(coalesce(a.training_load, a.trimp)), 0)
+                  FROM activity a WHERE a.local_date = calendar.day) AS load,
+               (SELECT coalesce(sum(a.distance_m), 0)
+                  FROM activity a WHERE a.local_date = calendar.day)
+                 AS sport_distance_m,
+               (SELECT coalesce(sum(a.elevation_gain_m), 0)
+                  FROM activity a WHERE a.local_date = calendar.day)
+                 AS elevation_m,
+               (SELECT coalesce(sum(a.elapsed_s), 0)
+                  FROM activity a WHERE a.local_date = calendar.day) AS sport_s,
+               m.ctl, m.atl, m.tsb
+          FROM calendar
+          LEFT JOIN hrv_night       h ON h.day        = calendar.day
+          LEFT JOIN daily_wellness  w ON w.day        = calendar.day
+          LEFT JOIN sleep_session   s ON s.sleep_date = calendar.day
+          LEFT JOIN marts_daily_load m ON m.day       = calendar.day
+         ORDER BY calendar.day
+        """,
+        (-days,),
+    )
+    if not rows:
+        return DailyMetrics()
+
+    # `.keys()` est obligatoire : une ligne SQLite s'itère par valeur.
+    colonnes = [k for k in rows[0].keys() if k != "day"]  # noqa: SIM118
+    return DailyMetrics(
+        days=[str(r["day"]) for r in rows],
+        series={k: [r[k] for r in rows] for k in colonnes},
+    )
+
+
+@dataclass
+class Intraday:
+    """Une journée relevée en continu par la montre."""
+
+    day: str = ""
+    labels: list[str] = field(default_factory=list)
+    series: dict[str, list[float | None]] = field(default_factory=dict)
+    # Nuits et séances, pour situer les creux et les pics sur l'axe.
+    spans: list[dict[str, Any]] = field(default_factory=list)
+    readings: int = 0
+
+    def get(self, key: str) -> list[float | None]:
+        return self.series.get(key, [])
+
+
+# Cinq minutes : la montre relève toutes les deux à trois minutes, donc chaque
+# case contient au moins une mesure. Plus fin, la courbe se briserait en
+# pointillés là où l'échantillonnage a simplement sauté un tour.
+INTRADAY_BUCKET_MIN = 5
+
+
+def intraday_bounds() -> dict[str, Any]:
+    """Premier et dernier jour disposant de relevés continus.
+
+    Les bornes sont prises sur l'instant brut, puis ramenées à l'heure locale
+    en Python : demander à SQLite `min(date(time, 'localtime'))` l'oblige à
+    convertir les cent soixante-dix mille lignes une à une, soit un demi-quart
+    de seconde pour deux dates.
+    """
+    rows = _safe("SELECT min(time) AS premier, max(time) AS dernier FROM wellness_reading")
+    if not rows or rows[0]["dernier"] is None:
+        return {"first_day": None, "last_day": None}
+    return {
+        "first_day": _local_day(rows[0]["premier"]),
+        "last_day": _local_day(rows[0]["dernier"]),
+    }
+
+
+def _local_day(instant: Any) -> str | None:
+    """Date locale d'un horodatage UTC."""
+    if instant is None:
+        return None
+    if not isinstance(instant, dt.datetime):
+        try:
+            instant = dt.datetime.fromisoformat(str(instant))
+        except ValueError:
+            return None
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=dt.UTC)
+    return instant.astimezone().date().isoformat()
+
+
+def _utc_window(day: str) -> tuple[str, str]:
+    """Bornes UTC encadrant une journée locale, au format stocké.
+
+    Les horodatages étant tous normalisés en UTC à l'écriture, leur
+    comparaison lexicographique équivaut à la comparaison chronologique : une
+    plage de texte suffit, et elle évite d'appeler une fonction de date sur
+    chaque ligne de la table.
+    """
+    minuit = dt.datetime.fromisoformat(day).astimezone()
+    lendemain = minuit + dt.timedelta(days=1)
+    return (
+        minuit.astimezone(dt.UTC).isoformat(sep=" "),
+        lendemain.astimezone(dt.UTC).isoformat(sep=" "),
+    )
+
+
+def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> Intraday:
+    """Fréquence cardiaque, stress et Body Battery d'une journée entière.
+
+    Les relevés arrivent à intervalle irrégulier ; ils sont moyennés dans des
+    cases de largeur fixe pour que l'axe reste proportionnel au temps. Une
+    case sans relevé reste vide plutôt que d'être comblée : la montre retirée
+    en milieu d'après-midi doit se voir.
+    """
+    if day is None:
+        day = intraday_bounds()["last_day"]
+    if not day:
+        return Intraday()
+
+    cases = 24 * 60 // bucket_min
+    debut, fin = _utc_window(day)
+    rows = _safe(
+        """
+        SELECT metric,
+               CAST(strftime('%H', time, 'localtime') AS INTEGER) * 60
+             + CAST(strftime('%M', time, 'localtime') AS INTEGER) AS minute,
+               value
+          FROM wellness_reading
+         WHERE time >= ? AND time < ?
+        """,
+        (debut, fin),
+    )
+
+    cumuls: dict[str, list[list[float]]] = {
+        metric: [[] for _ in range(cases)] for metric in ("hr", "stress", "body_battery")
+    }
+    for entry in rows:
+        seau = cumuls.get(entry["metric"])
+        if seau is None:
+            continue
+        index = min(int(entry["minute"]) // bucket_min, cases - 1)
+        # Garmin code par -1 les instants où la mesure n'a pas abouti ; les
+        # laisser passer creuserait un puits au milieu de la courbe.
+        if entry["value"] is not None and entry["value"] >= 0:
+            seau[index].append(float(entry["value"]))
+
+    result = Intraday(
+        day=day,
+        labels=[f"{i * bucket_min // 60:02d}:{i * bucket_min % 60:02d}" for i in range(cases)],
+        series={
+            metric: [sum(v) / len(v) if v else None for v in seaux]
+            for metric, seaux in cumuls.items()
+        },
+        readings=len(rows),
+    )
+    result.spans = _intraday_spans(day, bucket_min, cases)
+    return result
+
+
+def _intraday_spans(day: str, bucket_min: int, cases: int) -> list[dict[str, Any]]:
+    """Nuits et séances de la journée, exprimées en cases de l'axe.
+
+    Les libellés restent bruts : leur mise en forme appartient à la page, qui
+    seule sait combien de place elle a.
+    """
+    spans: list[dict[str, Any]] = []
+
+    def borne(minutes: float) -> float:
+        return min(max(minutes / bucket_min, 0.0), float(cases - 1))
+
+    # Une nuit chevauche deux dates : celle où l'on s'endort et celle où l'on
+    # se réveille. Les deux sessions concernées sont donc à considérer.
+    for nuit in _safe(
+        """
+        SELECT datetime(start_time, 'localtime') AS debut,
+               datetime(end_time, 'localtime')   AS fin,
+               duration_s
+          FROM sleep_session
+         WHERE date(start_time, 'localtime') = ? OR date(end_time, 'localtime') = ?
+        """,
+        (day, day),
+    ):
+        debut = _minutes_in_day(nuit["debut"], day, 0.0)
+        fin = _minutes_in_day(nuit["fin"], day, 24 * 60.0)
+        if debut is None or fin is None or fin <= debut:
+            continue
+        spans.append({
+            "kind": "sleep",
+            "label": "sommeil",
+            "duration_s": nuit["duration_s"],
+            "start": borne(debut),
+            "end": borne(fin),
+        })
+
+    for sortie in _safe(
+        """
+        SELECT name, sport, start_time_local, elapsed_s
+          FROM activity WHERE local_date = ? ORDER BY start_time_local
+        """,
+        (day,),
+    ):
+        debut = _minutes_in_day(sortie["start_time_local"], day, None)
+        if debut is None:
+            continue
+        fin = debut + (sortie["elapsed_s"] or 0) / 60
+        spans.append({
+            "kind": "activity",
+            "label": sortie["name"] or sortie["sport"],
+            "duration_s": sortie["elapsed_s"],
+            "start": borne(debut),
+            "end": borne(fin),
+        })
+    return spans
+
+
+def _minutes_in_day(value: Any, day: str, outside: float | None) -> float | None:
+    """Minutes écoulées depuis minuit, ou `outside` si l'instant est un autre jour.
+
+    Sert à rogner une nuit sur la journée affichée : endormi la veille à 23 h,
+    la barre commence à minuit et non hors du cadre.
+    """
+    if value is None:
+        return None
+    # Selon que la colonne est déclarée ou calculée, SQLite rend un datetime
+    # converti ou la chaîne brute ; les deux s'écrivent pareil.
+    texte = str(value)
+    if texte[:10] != day:
+        return outside
+    try:
+        return int(texte[11:13]) * 60 + int(texte[14:16])
+    except (ValueError, IndexError):
+        return None
+
+
 def recent_activities(limit: int = 60) -> list[dict[str, Any]]:
     """Dernières sorties, sources rétablies en liste.
 

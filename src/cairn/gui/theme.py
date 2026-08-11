@@ -22,8 +22,13 @@ OK = "#5fa87a"
 WARN = "#d9a441"
 DANGER = "#d9614b"
 
-# Couleurs de série pour les graphiques, dans l'ordre d'utilisation.
-SERIES = ("#e8834a", "#5fa87a", "#6b9bd2", "#d9a441", "#a97fd0")
+# Couleurs de série pour les graphiques, dans l'ordre d'utilisation. Les cinq
+# premières sont désignées par leur indice ailleurs dans le code : les
+# suivantes s'ajoutent en fin de liste, jamais au milieu.
+SERIES = (
+    "#e8834a", "#5fa87a", "#6b9bd2", "#d9a441", "#a97fd0",
+    "#4fb3a5", "#d97ba0", "#8fae5d", "#c9925f", "#7f9fd8",
+)
 
 
 def qcolor(hex_value: str, alpha: int = 255) -> QColor:

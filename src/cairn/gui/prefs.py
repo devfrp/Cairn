@@ -143,6 +143,22 @@ def apply_to_environment() -> None:
     reset_settings()
 
 
+def load_view(key: str, default: str = "") -> str:
+    """Préférence d'affichage — quels champs tracer, quelle période.
+
+    Rangée sous un préfixe distinct : contrairement aux clés de `FIELDS`, ces
+    valeurs ne sont pas publiées dans l'environnement et ne concernent que
+    l'interface.
+    """
+    return str(_store().value(f"vue/{key}", default) or default)
+
+
+def save_view(key: str, value: str) -> None:
+    store = _store()
+    store.setValue(f"vue/{key}", value)
+    store.sync()
+
+
 def describe_location() -> str:
     if is_portable():
         return f"Mode portable — {portable_file()}"

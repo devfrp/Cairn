@@ -212,6 +212,28 @@ def format_elevation(metres: float | None) -> str:
     return f"{round(metres)} m"
 
 
+# Noms écrits en dur : l'application est en français partout, et se reposer
+# sur la locale du système ferait afficher « Monday » sur un poste anglais.
+_JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+_MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+         "août", "septembre", "octobre", "novembre", "décembre")
+
+
+def format_long_day(day: dt.date | str | None) -> str:
+    """« mardi 11 août », avec l'année si ce n'est pas celle en cours."""
+    if day is None:
+        return "—"
+    if isinstance(day, str):
+        try:
+            day = dt.date.fromisoformat(day[:10])
+        except ValueError:
+            return day
+    if isinstance(day, dt.datetime):
+        day = day.date()
+    texte = f"{_JOURS[day.weekday()]} {day.day} {_MOIS[day.month - 1]}"
+    return texte if day.year == dt.date.today().year else f"{texte} {day.year}"
+
+
 def format_relative_day(day: dt.date | dt.datetime | None) -> str:
     """« aujourd'hui », « hier », puis la date."""
     if day is None:
@@ -379,6 +401,9 @@ class TrendChart(QWidget):
 
     Les séries n'ont pas la même échelle — des bpm et des heures ne se
     superposent pas — d'où une bande par mesure plutôt qu'un axe commun.
+
+    L'axe porte soit des dates, soit des heures : le même graphe sert à
+    suivre un mois et à dérouler une seule journée relevé par relevé.
     """
 
     BAND_HEIGHT = 82
@@ -387,19 +412,36 @@ class TrendChart(QWidget):
     RIGHT_MARGIN = 12
     AXIS_HEIGHT = 22
 
+    # Teintes des plages de fond : une nuit et une séance ne se confondent pas.
+    SPAN_COLOURS = {"sleep": theme.SERIES[4], "activity": theme.ACCENT}
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._days: list[str] = []
         self._series: list[dict] = []
+        self._spans: list[dict] = []
+        self._mode = "day"
         self._hover: int | None = None
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     # -- données ---------------------------------------------------------
 
-    def set_data(self, days: list[str], series: list[dict]) -> None:
-        """`series` : dicts {label, values, colour, unit} — unit formate la valeur."""
+    def set_data(
+        self,
+        days: list[str],
+        series: list[dict],
+        mode: str = "day",
+        spans: list[dict] | None = None,
+    ) -> None:
+        """`series` : dicts {label, values, colour, unit} — unit formate la valeur.
+
+        `mode` vaut `day` (étiquettes ISO) ou `time` (« HH:MM »). `spans`
+        décrit des plages à ombrer, en indices fractionnaires de l'axe.
+        """
         self._days = list(days)
+        self._mode = mode
+        self._spans = list(spans or [])
         # Une série entièrement vide n'apprend rien et volerait de la hauteur.
         self._series = [s for s in series if any(v is not None for v in s["values"])]
         self._hover = None
@@ -449,6 +491,8 @@ class TrendChart(QWidget):
         width = self._plot_width()
         step = width / (len(self._days) - 1)
 
+        # Les plages passent en premier : elles sont un fond, pas un calque.
+        self._paint_spans(painter, metrics, step)
         for rank, serie in enumerate(self._series):
             top = rank * (self.BAND_HEIGHT + self.BAND_SPACING) + self.BAND_SPACING
             self._paint_band(painter, metrics, serie, top, step)
@@ -457,6 +501,41 @@ class TrendChart(QWidget):
         if self._hover is not None:
             self._paint_cursor(painter, metrics, step)
         painter.end()
+
+    def _paint_spans(self, painter, metrics, step) -> None:
+        """Ombre les nuits et les séances derrière toutes les bandes.
+
+        Sur une journée, une fréquence cardiaque à 45 ne veut pas dire la même
+        chose selon qu'on dormait ou qu'on était assis : sans ces repères, la
+        courbe se lit à l'aveugle.
+        """
+        if not self._spans:
+            return
+
+        # Les intitulés occupent leur propre bandeau, tout en haut : posés à la
+        # hauteur des titres de bande, ils se cognaient au premier d'entre eux,
+        # qui déborde de sa colonne dès qu'il est un peu long.
+        bandeau = 15.0
+        bas = float(len(self._series) * (self.BAND_HEIGHT + self.BAND_SPACING))
+        for span in self._spans:
+            couleur = self.SPAN_COLOURS.get(span.get("kind", ""), theme.MUTED)
+            gauche = self.LABEL_WIDTH + span["start"] * step
+            largeur = max(2.0, (span["end"] - span["start"]) * step)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.qcolor(couleur, 26))
+            painter.drawRect(QRectF(gauche, 0.0, largeur, bas))
+
+            # L'intitulé n'apparaît que s'il tient : tronqué à deux lettres, il
+            # serait plus déroutant qu'absent.
+            texte = span.get("label") or ""
+            if texte and metrics.horizontalAdvance(texte) + 10 <= largeur:
+                painter.setPen(theme.qcolor(couleur, 210))
+                painter.drawText(
+                    QRectF(gauche + 5, 0.0, largeur - 8, bandeau),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    texte,
+                )
 
     def _paint_time_axis(self, painter, metrics, step) -> None:
         """Dates sous la dernière bande.
@@ -468,16 +547,36 @@ class TrendChart(QWidget):
         largeur_date = metrics.horizontalAdvance("00/00") + 18
         maximum = max(2, int(self._plot_width() // largeur_date))
         pas = max(1, -(-len(self._days) // maximum))
+        if self._mode == "time":
+            # Une graduation au milieu d'une heure ne se lit pas. On arrondit
+            # le pas à un nombre entier d'heures pour retomber sur des repères
+            # ronds — 00:00, 03:00, 06:00…
+            par_heure = max(1, round(60 / self._minutes_per_slot()))
+            pas = max(par_heure, -(-pas // par_heure) * par_heure)
 
         painter.setPen(QColor(theme.MUTED))
         for index in range(0, len(self._days), pas):
             x = self.LABEL_WIDTH + index * step
-            texte = self._short_day(self._days[index])
-            painter.drawText(
-                int(x - metrics.horizontalAdvance(texte) / 2),
-                int(base + metrics.ascent()),
-                texte,
+            texte = self._axis_label(self._days[index])
+            largeur = metrics.horizontalAdvance(texte)
+            # Centrée sur son point, la dernière date dépassait du cadre et
+            # s'affichait amputée de son mois.
+            gauche = min(x - largeur / 2, self.width() - largeur - 2)
+            painter.drawText(int(gauche), int(base + metrics.ascent()), texte)
+
+    def _minutes_per_slot(self) -> float:
+        """Durée d'une case, déduite des deux premières étiquettes horaires."""
+        if len(self._days) < 2:
+            return 60.0
+        try:
+            debut = self._days[0]
+            suivant = self._days[1]
+            ecart = (int(suivant[:2]) * 60 + int(suivant[3:5])) - (
+                int(debut[:2]) * 60 + int(debut[3:5])
             )
+        except (ValueError, IndexError):
+            return 60.0
+        return float(ecart) if ecart > 0 else 60.0
 
     def _paint_band(self, painter, metrics, serie, top, step) -> None:
         values = serie["values"]
@@ -561,7 +660,7 @@ class TrendChart(QWidget):
         painter.setPen(pen)
         painter.drawLine(int(x), 4, int(x), self.height() - 4)
 
-        lignes = [self._pretty_day(self._days[self._hover])]
+        lignes = [self._cursor_label(self._days[self._hover])]
         for serie in self._series:
             value = serie["values"][self._hover] if self._hover < len(serie["values"]) else None
             texte = serie["unit"](value) if value is not None else "—"
@@ -585,17 +684,21 @@ class TrendChart(QWidget):
             painter.drawText(int(gauche + 9), int(y), texte)
             y += metrics.height() + 2
 
-    @staticmethod
-    def _short_day(iso: str) -> str:
+    def _axis_label(self, valeur: str) -> str:
+        if self._mode == "time":
+            return valeur
         try:
-            return dt.date.fromisoformat(iso[:10]).strftime("%d/%m")
+            return dt.date.fromisoformat(valeur[:10]).strftime("%d/%m")
         except ValueError:
-            return iso
+            return valeur
 
-    @staticmethod
-    def _pretty_day(iso: str) -> str:
+    def _cursor_label(self, valeur: str) -> str:
+        if self._mode == "time":
+            # La date est déjà affichée au-dessus du graphe : seule l'heure
+            # manque, et on l'écrit comme on la dit.
+            return f"à {valeur.replace(':', ' h ')}"
         try:
-            jour = dt.date.fromisoformat(iso[:10])
+            jour = dt.date.fromisoformat(valeur[:10])
         except ValueError:
-            return iso
+            return valeur
         return format_relative_day(jour)
