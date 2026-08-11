@@ -162,7 +162,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Cairn",
             "CFBundleDisplayName": "Cairn",
-            "CFBundleShortVersionString": "0.1.2",
+            "CFBundleShortVersionString": "0.1.3",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
         },
