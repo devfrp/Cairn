@@ -490,8 +490,10 @@ class TrendChart(QWidget):
             return top + height - ((value - low) / span) * height
 
         unit = serie["unit"]
+        # Le titre se pose dans l'espace au-dessus de la bande : à l'intérieur,
+        # il chevauchait la graduation haute.
         painter.setPen(QColor(theme.TEXT))
-        painter.drawText(0, int(top) + metrics.ascent() - 16, serie["label"])
+        painter.drawText(0, int(top) - 9, serie["label"])
 
         # Trois graduations chiffrées plutôt que deux bornes : le milieu donne
         # l'échelle, et une courbe plate cesse de ressembler à une agitée.
@@ -529,6 +531,9 @@ class TrendChart(QWidget):
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
+        # Sans pinceau explicite, la courbe est remplie avec celui laissé par
+        # la bande précédente — le point de survol en pose un et Qt le garde.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
         if self._hover is not None and self._hover < len(values):

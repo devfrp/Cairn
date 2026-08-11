@@ -323,3 +323,75 @@ class TestPeriodeDuGraphe:
         assert demandes[-1] == 7
         assert page._period_buttons[7].isChecked()
         assert not page._period_buttons[30].isChecked()
+
+
+class TestRenduDuGraphe:
+    """Défauts qui ne se voient qu'à l'image, pas dans les valeurs."""
+
+    def chart(self, series):
+        from cairn.gui.widgets import TrendChart
+
+        chart = TrendChart()
+        chart.set_data(
+            [f"2026-08-{d:02d}" for d in range(1, 16)],
+            series,
+        )
+        chart.resize(700, chart.minimumHeight())
+        return chart
+
+    def rendu(self, chart):
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage
+
+        image = QImage(QSize(chart.width(), chart.height()), QImage.Format.Format_ARGB32)
+        image.fill(0)
+        chart.render(image)
+        return image
+
+    def serie(self, label, values, colour):
+        return {
+            "label": label,
+            "values": values,
+            "colour": colour,
+            "unit": lambda v: f"{v:.0f}",
+        }
+
+    def test_les_courbes_ne_sont_pas_remplies(self, qt_app):
+        """Qt garde le dernier pinceau posé.
+
+        Le point de survol en posait un ; la bande suivante remplissait alors
+        toute la surface sous sa courbe, avec la couleur de la précédente.
+        Invisible dans les données, criant à l'écran.
+        """
+        import math
+
+        dents = [50 + 40 * math.sin(i) for i in range(15)]
+        chart = self.chart([
+            self.serie("une", dents, "#6b9bd2"),
+            self.serie("deux", list(reversed(dents)), "#5fa87a"),
+        ])
+        chart._hover = 7  # c'est le survol qui posait le pinceau fautif
+
+        image = self.rendu(chart)
+
+        colores = sum(
+            1 for x in range(image.width()) for y in range(image.height())
+            if image.pixelColor(x, y).alpha() > 0
+            and image.pixelColor(x, y).saturation() > 60
+        )
+        part = colores / (image.width() * image.height())
+
+        # C'est la surface totale qui distingue un trait d'un aplat : un
+        # segment raide noircit beaucoup de pixels dans sa colonne sans rien
+        # remplir, alors qu'une aire pleine couvre le tiers du cadre. Mesuré
+        # à 4 % avec des courbes seules.
+        assert part < 0.12, f"{part:.0%} du cadre coloré : les aires sont remplies"
+
+    def test_titre_hors_de_la_bande(self, qt_app):
+        """Le titre chevauchait la graduation haute, illisible."""
+        chart = self.chart([self.serie("une", list(range(15)), "#6b9bd2")])
+
+        # Le titre se pose au-dessus du sommet de la bande.
+        top = chart.BAND_SPACING
+        assert chart.BAND_SPACING >= 20, "sans marge, le titre retombe dans la bande"
+        assert top - 9 < top
