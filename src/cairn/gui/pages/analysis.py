@@ -100,6 +100,13 @@ class AnalysisPage(QWidget):
         )
         layout.addWidget(self.gear)
 
+        self.segments = self._card(
+            "Progression sur les segments",
+            "Ceux parcourus plusieurs fois : c'est la répétition qui permet "
+            "de comparer.",
+        )
+        layout.addWidget(self.segments)
+
         layout.addStretch(1)
         self._health = queries.Health()
 
@@ -133,6 +140,7 @@ class AnalysisPage(QWidget):
         # L'usure ne dépend pas de la période choisie : elle se compte depuis
         # la pose de la pièce, pas sur les trente derniers jours.
         self._fill_gear()
+        self._fill_segments()
 
     def _fill_gear(self) -> None:
         """Une carte par matériel, ses pièces et leur usure."""
@@ -170,6 +178,31 @@ class AnalysisPage(QWidget):
             disposition.addWidget(
                 GearCard(materiel, par_materiel.get(identifiant, []), self._reload_gear)
             )
+
+    def _fill_segments(self) -> None:
+        from cairn.gui.pages.segments import SegmentRow
+
+        disposition = self.segments.layout()
+        while disposition.count() > 2:
+            element = disposition.takeAt(2)
+            if element.widget():
+                element.widget().deleteLater()
+
+        lignes = queries.repeated_segments()
+        if not lignes:
+            vide = QLabel(
+                "Aucun segment parcouru deux fois. Ils viennent de Strava, "
+                "avec les sorties."
+            )
+            vide.setObjectName("CardHint")
+            vide.setWordWrap(True)
+            disposition.addWidget(vide)
+            return
+
+        # Au-delà d'une quinzaine, la carte devient un mur : les moins courus
+        # n'apprennent de toute façon pas grand-chose.
+        for ligne in lignes[:15]:
+            disposition.addWidget(SegmentRow(dict(ligne)))
 
     def _reload_gear(self) -> None:
         self._fill_gear()

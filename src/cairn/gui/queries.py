@@ -584,3 +584,44 @@ def replace_gear_component(component_id: int) -> None:
                 ligne["service_interval_m"], ligne["gear_id"],
             ),
         )
+
+
+def repeated_segments(minimum: int = 2) -> list[dict[str, Any]]:
+    """Segments parcourus plusieurs fois, du plus fréquenté au moins.
+
+    Un segment vu une seule fois ne dit rien d'une progression : c'est la
+    répétition qui permet la comparaison.
+    """
+    return _safe(
+        """
+        SELECT s.strava_segment_id AS segment_id, s.name, s.distance_m,
+               s.avg_grade_pct, s.climb_category,
+               count(*) AS passages,
+               min(e.elapsed_s) AS best_s,
+               max(e.start_time) AS last_at,
+               (SELECT elapsed_s FROM segment_effort
+                 WHERE segment_id = s.strava_segment_id
+                 ORDER BY start_time DESC LIMIT 1) AS last_s
+          FROM segment_effort e
+          JOIN segment s ON s.strava_segment_id = e.segment_id
+         GROUP BY s.strava_segment_id
+        HAVING passages >= ?
+         ORDER BY passages DESC, s.name
+        """,
+        (minimum,),
+    )
+
+
+def segment_history(segment_id: int) -> list[dict[str, Any]]:
+    """Tous les passages sur un segment, du plus ancien au plus récent."""
+    return _safe(
+        """
+        SELECT e.start_time, e.elapsed_s, e.avg_hr, e.pr_rank,
+               a.id AS activity_id, a.name AS activity_name
+          FROM segment_effort e
+          LEFT JOIN activity a ON a.id = e.activity_id
+         WHERE e.segment_id = ?
+         ORDER BY e.start_time
+        """,
+        (segment_id,),
+    )

@@ -512,3 +512,65 @@ class TestUsureDuMateriel:
         queries.replace_gear_component(9999)
 
         assert db.fetch_one("SELECT count(*) AS n FROM gear_component")["n"] == 0
+
+
+class TestProgressionSurSegments:
+    """Strava garde les temps mais réserve la progression aux abonnés.
+
+    Les données sont pourtant déjà là. Un segment vu une seule fois ne dit
+    rien : c'est la répétition qui permet de comparer.
+    """
+
+    @pytest.fixture
+    def segment(self, athlete):
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO segment (strava_segment_id, name, distance_m,
+                                        avg_grade_pct, activity_family)
+                   VALUES (77, 'Côte du Test', 800, 6.4, 'cycling')"""
+            )
+        return 77
+
+    def _passage(self, segment_id, jour, secondes, effort_id):
+        db.execute(
+            """INSERT INTO segment_effort (strava_effort_id, segment_id, start_time,
+                                           elapsed_s, moving_s)
+               VALUES (?, ?, ?, ?, ?)""",
+            (effort_id, segment_id, f"2026-0{jour}-01T09:00:00+00:00", secondes, secondes),
+        )
+
+    def test_un_seul_passage_nest_pas_listé(self, segment):
+        from cairn.gui import queries
+
+        self._passage(segment, 1, 300, 1)
+
+        assert queries.repeated_segments() == []
+
+    def test_record_et_dernier_temps(self, segment):
+        from cairn.gui import queries
+
+        self._passage(segment, 1, 320, 1)
+        self._passage(segment, 2, 295, 2)   # record
+        self._passage(segment, 3, 310, 3)   # dernier
+
+        ligne = dict(queries.repeated_segments()[0])
+        assert ligne["passages"] == 3
+        assert ligne["best_s"] == 295
+        assert ligne["last_s"] == 310, "le dernier passage, pas le meilleur"
+
+    def test_historique_dans_lordre(self, segment):
+        from cairn.gui import queries
+
+        self._passage(segment, 3, 310, 3)
+        self._passage(segment, 1, 320, 1)
+        self._passage(segment, 2, 295, 2)
+
+        temps = [dict(p)["elapsed_s"] for p in queries.segment_history(segment)]
+        assert temps == [320, 295, 310], "du plus ancien au plus récent"
+
+    def test_chrono_lisible(self):
+        from cairn.gui.pages.segments import format_chrono
+
+        assert format_chrono(105) == "1:45"
+        assert format_chrono(60) == "1:00"
+        assert format_chrono(None) == "—"
