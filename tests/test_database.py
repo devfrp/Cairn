@@ -55,8 +55,18 @@ def activity_fields(**overrides):
 
 class TestSchema:
     def test_migrations_appliquees(self, base):
+        """Toutes celles du dossier, et rien d'autre.
+
+        Comparer à une liste écrite en dur obligeait à modifier ce test à
+        chaque migration ajoutée — un échec sans rapport avec un défaut.
+        """
+        from cairn.migrate import _migrations_dir
+
+        attendues = sorted(p.stem for p in _migrations_dir().glob("*.sql"))
         rows = db.fetch_all("SELECT version FROM schema_migration ORDER BY version")
-        assert [r["version"] for r in rows] == ["0001_init", "0002_sport_map"]
+
+        assert [r["version"] for r in rows] == attendues
+        assert attendues[0] == "0001_init", "la première reste le schéma initial"
 
     def test_relancer_est_sans_effet(self, base):
         assert migrate.upgrade() == []
