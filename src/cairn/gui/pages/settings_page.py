@@ -426,6 +426,16 @@ class SettingsPage(QWidget):
         self.btn_portable.clicked.connect(self._enable_portable)
         buttons.addWidget(self.btn_portable)
 
+        # Ce fichier est tout ce que l'utilisateur possède : une année de
+        # synchronisation ne se rattrape pas en un clic si le disque lâche.
+        self.btn_backup = QPushButton("Sauvegarder les données")
+        self.btn_backup.setToolTip(
+            "Copie cohérente du fichier de données, prise même pendant que "
+            "l'application travaille."
+        )
+        self.btn_backup.clicked.connect(self._backup)
+        buttons.addWidget(self.btn_backup)
+
         save = QPushButton("Enregistrer les réglages")
         save.setObjectName("Primary")
         save.clicked.connect(self.save_values)
@@ -530,6 +540,25 @@ class SettingsPage(QWidget):
 
         prefs.apply_to_environment()
         self._start(upgrade, "Installation du schéma")
+
+    def _backup(self) -> None:
+        """Sauvegarde le fichier de données à l'endroit choisi."""
+        import datetime as dt
+
+        from PySide6.QtWidgets import QFileDialog
+
+        defaut = f"cairn-{dt.date.today():%Y-%m-%d}.db"
+        chemin, _ = QFileDialog.getSaveFileName(
+            self, "Sauvegarder les données", defaut, "Base Cairn (*.db)"
+        )
+        if not chemin:
+            return
+
+        def task() -> str:
+            resultat = queries.backup_database(chemin)
+            return f"{resultat['size_bytes'] / 1e6:.0f} Mo écrits dans {resultat['path']}"
+
+        self._start(task, "Sauvegarde")
 
     def _login_garmin(self) -> None:
         if self._worker is not None:

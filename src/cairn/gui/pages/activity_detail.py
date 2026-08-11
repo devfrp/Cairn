@@ -25,6 +25,11 @@ from PySide6.QtWidgets import (
 )
 
 from cairn.gui import queries, theme
+
+# Une seule table de libellés pour toute l'application : la copie qui
+# vivait ici a fait afficher « surf » en clé brute le jour où le sport a
+# été reconnu ailleurs.
+from cairn.gui.pages.activities import SPORT_LABELS
 from cairn.gui.widgets import (
     Card,
     TrendChart,
@@ -34,17 +39,16 @@ from cairn.gui.widgets import (
     format_relative_day,
 )
 
-SPORTS = {
-    "mtb": "VTT",
-    "enduro": "Enduro",
-    "gravel": "Gravel",
-    "road": "Route",
-    "run": "Course",
-    "trail_run": "Trail",
-    "surf": "Surf",
-    "swim": "Natation",
-    "walk": "Marche",
+ZONES = {
+    1: "Zone 1 · récup",
+    2: "Zone 2 · endurance",
+    3: "Zone 3 · tempo",
+    4: "Zone 4 · seuil",
+    5: "Zone 5 · maximal",
 }
+
+COULEURS_ZONES = ("#6b9bd2", "#5fa87a", "#d9a441", "#e8834a", "#d9614b")
+
 
 
 class ActivityDetailDialog(QDialog):
@@ -64,6 +68,10 @@ class ActivityDetailDialog(QDialog):
 
         layout.addWidget(self._entete(detail))
         layout.addWidget(self._chiffres(detail))
+
+        zones = queries.activity_zones(activity_id)
+        if zones:
+            layout.addWidget(self._zones(zones))
 
         flux = queries.activity_streams(activity_id)
         layout.addWidget(self._courbes(flux), 1)
@@ -86,7 +94,7 @@ class ActivityDetailDialog(QDialog):
         titre.setObjectName("PageTitle")
         colonne.addWidget(titre)
 
-        sport = SPORTS.get(detail.get("sport"), detail.get("sport") or "—")
+        sport = SPORT_LABELS.get(detail.get("sport"), detail.get("sport") or "—")
         morceaux = [sport, format_relative_day(detail.get("start_time_local"))]
         if detail.get("gear_name"):
             morceaux.append(detail["gear_name"])
@@ -132,6 +140,31 @@ class ActivityDetailDialog(QDialog):
     @staticmethod
     def _entier(value: Any) -> str:
         return f"{value:.0f}" if value else "—"
+
+    # -- zones -----------------------------------------------------------
+
+    def _zones(self, zones: list[dict[str, Any]]) -> QWidget:
+        """Répartition de l'effort, ce que la durée seule ne dit pas."""
+        from cairn.gui.widgets import BarBreakdown
+
+        carte = Card()
+        titre = QLabel("Temps par zone de fréquence cardiaque")
+        titre.setObjectName("SectionTitle")
+        carte.layout().addWidget(titre)
+
+        total = sum(z["seconds"] for z in zones) or 1
+        barres = BarBreakdown()
+        barres.set_rows([
+            (
+                ZONES.get(z["zone_index"], f"Zone {z['zone_index']}"),
+                float(z["seconds"]),
+                f"{format_duration(z['seconds'])} · {z['seconds'] / total * 100:.0f} %",
+                COULEURS_ZONES[min(z["zone_index"], len(COULEURS_ZONES)) - 1],
+            )
+            for z in zones
+        ])
+        carte.layout().addWidget(barres)
+        return carte
 
     # -- courbes ---------------------------------------------------------
 

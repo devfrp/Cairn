@@ -625,3 +625,111 @@ def segment_history(segment_id: int) -> list[dict[str, Any]]:
         """,
         (segment_id,),
     )
+
+
+def personal_records(minimum_sessions: int = 3) -> list[dict[str, Any]]:
+    """Meilleures marques par discipline, avec la sortie qui les détient.
+
+    Un record n'a de sens qu'après quelques séances : en dessous, c'est
+    simplement la seule sortie du sport. Le seuil écarte ce bruit.
+
+    La charge la plus élevée compte autant que la distance : une séance courte
+    et intense est une performance, ce que le kilométrage seul ne dit pas.
+    """
+    return _safe(
+        """
+        WITH pratiques AS (
+            SELECT sport, count(*) AS sessions FROM activity
+             GROUP BY sport HAVING sessions >= ?
+        )
+        SELECT p.sport, p.sessions,
+               (SELECT id FROM activity WHERE sport = p.sport
+                 ORDER BY distance_m DESC LIMIT 1) AS longest_id,
+               (SELECT max(distance_m) FROM activity WHERE sport = p.sport) AS longest_m,
+               (SELECT id FROM activity WHERE sport = p.sport
+                 ORDER BY elevation_gain_m DESC LIMIT 1) AS highest_id,
+               (SELECT max(elevation_gain_m) FROM activity WHERE sport = p.sport)
+                 AS highest_m,
+               (SELECT id FROM activity WHERE sport = p.sport
+                 ORDER BY elapsed_s DESC LIMIT 1) AS longest_time_id,
+               (SELECT max(elapsed_s) FROM activity WHERE sport = p.sport)
+                 AS longest_time_s,
+               (SELECT id FROM activity WHERE sport = p.sport
+                 ORDER BY coalesce(trimp, training_load) DESC LIMIT 1) AS hardest_id,
+               (SELECT max(coalesce(trimp, training_load)) FROM activity
+                 WHERE sport = p.sport) AS hardest_load
+          FROM pratiques p
+         ORDER BY p.sessions DESC
+        """,
+        (minimum_sessions,),
+    )
+
+
+def activity_zones(activity_id: int) -> list[dict[str, Any]]:
+    """Temps passé dans chaque zone de fréquence cardiaque, pour une sortie.
+
+    La page Analyse cumule ces temps sur une période ; au niveau d'une séance,
+    c'est ce qui distingue une sortie facile d'un travail au seuil, à durée
+    identique.
+    """
+    return _safe(
+        """
+        SELECT zone_index, seconds FROM activity_zone_time
+         WHERE activity_id = ? AND metric = 'hr'
+         ORDER BY zone_index
+        """,
+        (activity_id,),
+    )
+
+
+def worn_components(threshold_pct: float = 80.0) -> list[dict[str, Any]]:
+    """Pièces proches ou au-delà de leur intervalle d'entretien.
+
+    Remonté au tableau de bord : une chaîne usée ne se découvre pas en
+    consultant la page Analyse, mais le jour où elle saute.
+    """
+    return _safe(
+        """
+        SELECT g.name AS gear_name, c.kind, c.label,
+               g.distance_m - c.installed_at_gear_m AS since_install_m,
+               c.service_interval_m,
+               100.0 * (g.distance_m - c.installed_at_gear_m)
+                     / c.service_interval_m AS wear_pct
+          FROM gear_component c
+          JOIN gear g ON g.id = c.gear_id
+         WHERE c.removed_on IS NULL
+           AND c.service_interval_m > 0
+           AND g.retired = 0
+           AND 100.0 * (g.distance_m - c.installed_at_gear_m)
+                     / c.service_interval_m >= ?
+         ORDER BY wear_pct DESC
+        """,
+        (threshold_pct,),
+    )
+
+
+def backup_database(destination: str) -> dict[str, Any]:
+    """Copie cohérente du fichier de données vers `destination`.
+
+    Passe par l'API de sauvegarde de SQLite, et non par une copie de fichier :
+    la base tourne en mode WAL, où les écritures récentes vivent dans un
+    journal séparé. Copier le seul `.db` donnerait une sauvegarde amputée des
+    dernières synchronisations, sans que rien ne le signale.
+
+    Une sauvegarde peut être prise pendant que l'application travaille.
+    """
+    import sqlite3 as sq
+    from pathlib import Path
+
+    from cairn.db import get_connection
+
+    cible = Path(destination)
+    cible.parent.mkdir(parents=True, exist_ok=True)
+
+    copie = sq.connect(cible)
+    try:
+        get_connection().backup(copie)
+    finally:
+        copie.close()
+
+    return {"path": str(cible), "size_bytes": cible.stat().st_size}

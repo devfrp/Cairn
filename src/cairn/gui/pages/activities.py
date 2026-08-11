@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -25,6 +26,15 @@ from cairn.gui.widgets import (
     format_elevation,
     row,
 )
+
+
+def _fold(text: str) -> str:
+    """Minuscules sans accents, pour une recherche indulgente."""
+    import unicodedata
+
+    decompose = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in decompose if unicodedata.category(c) != "Mn")
+
 
 SPORT_LABELS = {
     "mtb": "VTT",
@@ -40,6 +50,18 @@ SPORT_LABELS = {
     "cardio": "Cardio",
     "mobility": "Mobilité",
     "ski": "Ski",
+    # Sports découverts à la première synchronisation réelle : sans libellé,
+    # la clé technique s'affichait telle quelle à l'écran.
+    "surf": "Surf",
+    "paddle": "Paddle",
+    "kitesurf": "Kitesurf",
+    "windsurf": "Windsurf",
+    "badminton": "Badminton",
+    "football": "Football",
+    "tennis": "Tennis",
+    "ping_pong": "Tennis de table",
+    "breathwork": "Respiration",
+    "incident_detected": "Chute détectée",
     "other": "Autre",
 }
 
@@ -141,9 +163,16 @@ class ActivitiesPage(QWidget):
         self.sport_filter.addItem("Tous les sports", "")
         self.sport_filter.currentIndexChanged.connect(self._apply_filter)
 
+        # Cent dix-huit sorties : retrouver « la sortie de Pra Loup » au
+        # défilement est pénible, et le seul filtre par sport n'y aide pas.
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher un nom, un matériel…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+
         self.summary = QLabel("")
         self.summary.setObjectName("PageHint")
-        layout.addWidget(row(self.sport_filter, self.summary))
+        layout.addWidget(row(self.sport_filter, self.search, self.summary))
 
         self.model = ActivityModel(self)
         self.table = QTableView()
@@ -205,13 +234,36 @@ class ActivitiesPage(QWidget):
 
     def _apply_filter(self) -> None:
         wanted = self.sport_filter.currentData() or ""
-        rows = [e for e in self._all if not wanted or e.get("sport") == wanted]
+        needle = self.search.text().strip().lower()
+
+        rows = [
+            e for e in self._all
+            if (not wanted or e.get("sport") == wanted) and self._matches(e, needle)
+        ]
         self.model.set_rows(rows)
 
         merged = sum(1 for e in rows if len({s for s in (e.get("sources") or []) if s}) > 1)
         if rows:
-            self.summary.setText(
-                f"{len(rows)} sortie(s) · {merged} vue(s) des deux sources"
-            )
+            detail = f"{len(rows)} sortie(s) · {merged} vue(s) des deux sources"
+            if needle or wanted:
+                detail += f" · sur {len(self._all)}"
+            self.summary.setText(detail)
+        elif self._all:
+            self.summary.setText("Aucune sortie ne correspond à cette recherche.")
         else:
             self.summary.setText("Aucune activité. Lancez une synchronisation.")
+
+    @staticmethod
+    def _matches(entry: dict[str, Any], needle: str) -> bool:
+        """Nom, matériel et libellé de sport, sans accent ni casse.
+
+        Chercher « velo » doit trouver « Sortie vélo » : personne ne tape les
+        accents dans un champ de recherche.
+        """
+        if not needle:
+            return True
+        champs = " ".join(
+            str(entry.get(cle) or "") for cle in ("name", "gear_name", "sport")
+        )
+        champs += " " + SPORT_LABELS.get(entry.get("sport"), "")
+        return _fold(needle) in _fold(champs)

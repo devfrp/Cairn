@@ -129,9 +129,17 @@ class TestActivityModel:
         assert self._cell(model, 0, 9) == "—"
 
     def test_sport_inconnu_affiche_sa_cle(self, qt_app):
+        """Un sport sans libellé se montre tel quel plutôt que disparaître.
+
+        La clé choisie ici doit rester absente de la table : « kitesurf » y a
+        été ajouté depuis, et le test passait alors pour de mauvaises raisons.
+        """
+        from cairn.gui.pages.activities import SPORT_LABELS
+
+        assert "wingfoil" not in SPORT_LABELS
         model = ActivityModel()
-        model.set_rows([_activity(sport="kitesurf")])
-        assert self._cell(model, 0, 1) == "kitesurf"
+        model.set_rows([_activity(sport="wingfoil")])
+        assert self._cell(model, 0, 1) == "wingfoil"
 
     def test_index_invalide(self, qt_app):
         from PySide6.QtCore import QModelIndex

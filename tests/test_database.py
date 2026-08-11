@@ -574,3 +574,68 @@ class TestProgressionSurSegments:
         assert format_chrono(105) == "1:45"
         assert format_chrono(60) == "1:00"
         assert format_chrono(None) == "—"
+
+
+class TestSauvegarde:
+    """Le fichier de données est tout ce que l'utilisateur possède.
+
+    La base tourne en WAL : les écritures récentes vivent dans un journal
+    séparé. Copier le seul `.db` donnerait une sauvegarde amputée des
+    dernières synchronisations, sans que rien ne le signale.
+    """
+
+    def test_copie_complete_et_valide(self, athlete, tmp_path):
+        from cairn.gui import queries
+
+        with db.connection() as conn:
+            repo.upsert_activity(
+                conn, athlete_id=athlete, source="garmin", external_id="1",
+                external_url=None, raw_payload_id=None,
+                fields=activity_fields(), existing_id=None,
+            )
+
+        cible = tmp_path / "sauvegardes" / "cairn.db"
+        resultat = queries.backup_database(str(cible))
+
+        assert cible.exists()
+        assert resultat["size_bytes"] > 0
+
+        import sqlite3
+
+        copie = sqlite3.connect(cible)
+        try:
+            assert copie.execute("SELECT count(*) FROM activity").fetchone()[0] == 1
+            assert copie.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        finally:
+            copie.close()
+
+    def test_ecritures_recentes_incluses(self, athlete, tmp_path):
+        """Ce qu'une copie de fichier brute manquerait en mode WAL."""
+        from cairn.gui import queries
+
+        with db.connection() as conn:
+            repo.upsert_activity(
+                conn, athlete_id=athlete, source="garmin", external_id="tardive",
+                external_url=None, raw_payload_id=None,
+                fields=activity_fields(name="Écrite juste avant"), existing_id=None,
+            )
+
+        cible = tmp_path / "cairn.db"
+        queries.backup_database(str(cible))
+
+        import sqlite3
+
+        copie = sqlite3.connect(cible)
+        try:
+            noms = [r[0] for r in copie.execute("SELECT name FROM activity")]
+        finally:
+            copie.close()
+        assert "Écrite juste avant" in noms
+
+    def test_dossier_cree_au_besoin(self, athlete, tmp_path):
+        from cairn.gui import queries
+
+        cible = tmp_path / "a" / "b" / "c" / "cairn.db"
+        queries.backup_database(str(cible))
+
+        assert cible.exists()

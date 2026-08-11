@@ -24,6 +24,7 @@ from cairn.gui.widgets import (
     SectionHeader,
     format_distance,
     format_duration,
+    format_elevation,
     row,
 )
 
@@ -107,6 +108,13 @@ class AnalysisPage(QWidget):
         )
         layout.addWidget(self.segments)
 
+        self.records = self._card(
+            "Records personnels",
+            "Par discipline, à partir de trois séances — en dessous, c'est "
+            "simplement la seule sortie du sport.",
+        )
+        layout.addWidget(self.records)
+
         layout.addStretch(1)
         self._health = queries.Health()
 
@@ -141,6 +149,7 @@ class AnalysisPage(QWidget):
         # la pose de la pièce, pas sur les trente derniers jours.
         self._fill_gear()
         self._fill_segments()
+        self._fill_records()
 
     def _fill_gear(self) -> None:
         """Une carte par matériel, ses pièces et leur usure."""
@@ -203,6 +212,45 @@ class AnalysisPage(QWidget):
         # n'apprennent de toute façon pas grand-chose.
         for ligne in lignes[:15]:
             disposition.addWidget(SegmentRow(dict(ligne)))
+
+    def _fill_records(self) -> None:
+        """Meilleures marques par discipline.
+
+        La charge la plus élevée figure à côté de la distance : une séance
+        courte et intense est une performance, ce que le kilométrage seul ne
+        dit pas.
+        """
+        disposition = self.records.layout()
+        while disposition.count() > 2:
+            element = disposition.takeAt(2)
+            if element.widget():
+                element.widget().deleteLater()
+
+        lignes = queries.personal_records()
+        if not lignes:
+            vide = QLabel("Pas encore assez de séances pour dégager des records.")
+            vide.setObjectName("CardHint")
+            disposition.addWidget(vide)
+            return
+
+        for ligne in lignes:
+            d = dict(ligne)
+            sport = SPORT_LABELS.get(d["sport"], d["sport"])
+            marques = []
+            if d["longest_m"]:
+                marques.append(f"la plus longue {format_distance(d['longest_m'])}")
+            if d["highest_m"]:
+                marques.append(f"{format_elevation(d['highest_m'])} de D+")
+            if d["longest_time_s"]:
+                marques.append(f"{format_duration(d['longest_time_s'])} d'affilée")
+            if d["hardest_load"]:
+                marques.append(f"charge maximale {d['hardest_load']:.0f}")
+
+            texte = QLabel(
+                f"<b>{sport}</b> · {d['sessions']} séances — " + ", ".join(marques)
+            )
+            texte.setWordWrap(True)
+            disposition.addWidget(texte)
 
     def _reload_gear(self) -> None:
         self._fill_gear()

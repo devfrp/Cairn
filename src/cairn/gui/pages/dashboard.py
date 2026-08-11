@@ -36,6 +36,19 @@ from cairn.gui.workers import Worker
 # habituellement ; en dessous de -30 %, c'est une semaine de coupure.
 LOAD_SURGE_PCT = 30.0
 
+# Libellés courts des pièces, pour tenir sur une ligne d'alerte.
+PIECES_COURTES = {
+    "chain": "la chaîne",
+    "cassette": "la cassette",
+    "chainring": "le plateau",
+    "tyre_front": "le pneu avant",
+    "tyre_rear": "le pneu arrière",
+    "brake_pads": "les plaquettes",
+    "fork_service": "la fourche",
+    "shock_service": "l'amortisseur",
+    "shoes": "les semelles",
+}
+
 
 class DashboardPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -433,16 +446,29 @@ class DashboardPage(QWidget):
             self.acwr.set_value(f"{fitness.acwr:.2f}", hint, colour)
 
     def _fill_signals(self, flags: list) -> None:
-        if not flags:
-            self.signals_card.hide()
-            return
-
         colours = {"alert": theme.DANGER, "warn": theme.WARN, "info": theme.MUTED}
-        self.signals.setText("<br>".join(
+        lignes = [
             f"<span style='color:{colours.get(f['severity'], theme.MUTED)}'>●</span> "
             f"{f['message']}"
             for f in flags[:4]
-        ))
+        ]
+
+        # Une chaîne usée ne se découvre pas en consultant la page Analyse,
+        # mais le jour où elle saute : l'alerte a sa place ici.
+        for piece in queries.worn_components()[:3]:
+            usure = piece["wear_pct"]
+            couleur = theme.DANGER if usure >= 100 else theme.WARN
+            nom = piece["label"] or PIECES_COURTES.get(piece["kind"], piece["kind"])
+            lignes.append(
+                f"<span style='color:{couleur}'>●</span> "
+                f"{nom} de {piece['gear_name']} : {usure:.0f} % de l'intervalle "
+                f"d'entretien."
+            )
+
+        if not lignes:
+            self.signals_card.hide()
+            return
+        self.signals.setText("<br>".join(lignes))
         self.signals_card.show()
 
     def _show_unavailable(self, health: queries.Health) -> None:
