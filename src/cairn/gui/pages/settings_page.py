@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -52,72 +51,77 @@ def launch_browser(url: str) -> bool:
     return QDesktopServices.openUrl(QUrl(url))
 
 
-class AuthorizeDialog(QDialog):
-    """Affiche l'adresse d'autorisation, que le navigateur s'ouvre ou non.
+class StravaCredentialsDialog(QDialog):
+    """Récupère l'identifiant d'application Strava, en une fois.
 
-    Se contenter d'appeler le navigateur laissait l'utilisateur devant une
-    fenêtre inerte quand le lancement échouait : rien ne s'ouvrait et rien ne
-    le disait. L'adresse est donc toujours à l'écran, sélectionnable.
+    Strava n'ouvre sa page d'autorisation qu'à une application déclarée : son
+    adresse contient un `client_id`. Impossible d'y couper, contrairement à
+    Garmin, dont Cairn emprunte l'application mobile officielle.
+
+    Autant que cette déclaration se fasse sans quitter le flux : la page de
+    Strava s'ouvre d'ici, les deux valeurs se collent ici, et la connexion
+    enchaîne aussitôt.
     """
 
-    def __init__(self, url: str, parent: QWidget | None = None) -> None:
+    PAGE = "https://www.strava.com/settings/api"
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._url = url
-        self.setWindowTitle("Autoriser Cairn sur Strava")
+        self.setWindowTitle("Déclarer Cairn auprès de Strava")
         self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
         intro = QLabel(
-            "Ouvrez cette adresse, autorisez Cairn, puis revenez ici : la page "
-            "d'arrivée affichera une erreur, c'est normal. C'est son adresse "
-            "qui compte, elle contient le paramètre « code »."
+            "Strava n'ouvre sa page de connexion qu'aux applications "
+            "déclarées. C'est à faire une seule fois, en deux minutes.\n\n"
+            "Sur la page qui va s'ouvrir, créez une application et indiquez "
+            "« localhost » comme domaine de rappel. Recopiez ensuite les deux "
+            "valeurs ci-dessous ; la connexion démarrera aussitôt."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        self.field = QLineEdit(url)
-        self.field.setReadOnly(True)
-        self.field.setCursorPosition(0)
-        layout.addWidget(self.field)
+        ouvrir = QPushButton("Ouvrir la page Strava")
+        ouvrir.clicked.connect(lambda: launch_browser(self.PAGE))
+        layout.addWidget(ouvrir)
 
-        self.status = QLabel("")
-        self.status.setObjectName("SidebarSubtitle")
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        self.client_id = QLineEdit()
+        self.client_id.setPlaceholderText("Client ID")
+        layout.addWidget(field_row("Identifiant client", self.client_id))
+
+        self.client_secret = QLineEdit()
+        self.client_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.client_secret.setPlaceholderText("Client Secret")
+        layout.addWidget(field_row("Secret client", self.client_secret))
 
         buttons = QDialogButtonBox()
-        open_button = buttons.addButton(
-            "Ouvrir le navigateur", QDialogButtonBox.ButtonRole.AcceptRole
+        valider = buttons.addButton(
+            "Se connecter", QDialogButtonBox.ButtonRole.AcceptRole
         )
-        copy_button = buttons.addButton(
-            "Copier l'adresse", QDialogButtonBox.ButtonRole.ActionRole
-        )
-        buttons.addButton("Fermer", QDialogButtonBox.ButtonRole.RejectRole)
-
-        open_button.clicked.connect(self._open)
-        copy_button.clicked.connect(self._copy)
+        buttons.addButton("Annuler", QDialogButtonBox.ButtonRole.RejectRole)
+        valider.clicked.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        # Tentative immédiate : dans le cas courant le navigateur s'ouvre et
-        # cette fenêtre n'est plus qu'un filet de sécurité.
-        self._open()
-
-    def _open(self) -> None:
-        if launch_browser(self._url):
-            self.status.setText("Navigateur lancé.")
-        else:
-            self.status.setText(
-                "Le navigateur n'a pas pu être lancé. Copiez l'adresse "
-                "ci-dessus et ouvrez-la vous-même."
+    def _accept(self) -> None:
+        identifiant = self.client_id.text().strip()
+        secret = self.client_secret.text().strip()
+        if not identifiant or not secret:
+            QMessageBox.warning(
+                self, "Champs manquants",
+                "Les deux valeurs sont nécessaires : Strava refuse "
+                "l'autorisation sans elles.",
             )
+            return
 
-    def _copy(self) -> None:
-        QGuiApplication.clipboard().setText(self._url)
-        self.field.selectAll()
-        self.status.setText("Adresse copiée.")
+        valeurs = prefs.load()
+        valeurs["strava_client_id"] = identifiant
+        valeurs["strava_client_secret"] = secret
+        prefs.save(valeurs)
+        prefs.apply_to_environment()
+        self.accept()
 
 
 class SettingsPage(QWidget):
@@ -249,10 +253,11 @@ class SettingsPage(QWidget):
         card.layout().addLayout(header)
 
         hint = QLabel(
-            "Créez une application sur strava.com/settings/api, puis reportez "
-            "ses identifiants ici. L'autorisation ouvre votre navigateur ; "
-            "Strava renvoie ensuite vers une adresse contenant un paramètre "
-            "« code » à recopier."
+            "Créez une application sur strava.com/settings/api en indiquant "
+            "« localhost » comme domaine de rappel, puis reportez ses "
+            "identifiants ici. Cairn ouvre ensuite la page d'autorisation de "
+            "Strava dans une fenêtre : votre mot de passe va directement à "
+            "Strava, Cairn n'en récupère qu'un jeton."
         )
         hint.setObjectName("CardHint")
         hint.setWordWrap(True)
@@ -266,14 +271,10 @@ class SettingsPage(QWidget):
         card.layout().addWidget(field_row("Secret client", self.strava_secret))
 
         buttons = QHBoxLayout()
-        self.btn_strava_open = QPushButton("Autoriser dans le navigateur")
-        self.btn_strava_open.clicked.connect(self._open_strava)
-        buttons.addWidget(self.btn_strava_open)
-
-        self.btn_strava_code = QPushButton("Saisir le code obtenu")
-        self.btn_strava_code.setObjectName("Primary")
-        self.btn_strava_code.clicked.connect(self._exchange_strava)
-        buttons.addWidget(self.btn_strava_code)
+        self.btn_strava = QPushButton("Se connecter à Strava")
+        self.btn_strava.setObjectName("Primary")
+        self.btn_strava.clicked.connect(self._open_strava)
+        buttons.addWidget(self.btn_strava)
         buttons.addStretch(1)
         card.layout().addLayout(buttons)
         return card
@@ -588,55 +589,55 @@ class SettingsPage(QWidget):
 
         settings = get_settings()
         if not settings.strava_client_id or not settings.strava_client_secret:
-            # Dire ce qui manque ne suffit pas : ces deux valeurs viennent
-            # d'une application à créer chez Strava, ce que rien n'indique.
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Identifiants Strava manquants")
-            box.setText(
-                "Strava demande de déclarer une application pour donner accès "
-                "à vos données.\n\n"
-                "Créez-en une, puis recopiez ci-dessus « Client ID » et "
-                "« Client Secret ». Indiquez « localhost » comme domaine de "
-                "rappel : Cairn n'a pas de serveur, vous recopierez le code "
-                "depuis la barre d'adresse."
+            # Contrairement à Garmin, Strava exige un identifiant
+            # d'application dans l'adresse d'autorisation : sans lui, il n'y a
+            # aucune page de connexion à ouvrir. Plutôt que de renvoyer
+            # l'utilisateur vers les champs du dessus, on récupère les deux
+            # valeurs ici et on enchaîne sur la connexion.
+            if not StravaCredentialsDialog(self).exec():
+                return
+            self.load_values()
+            get_settings.cache_clear()
+            settings = get_settings()
+            if not settings.strava_client_id or not settings.strava_client_secret:
+                return
+
+        # Le jeton se range dans le fichier de données, comme celui de Garmin.
+        health = queries.ensure_schema()
+        if not health.usable:
+            QMessageBox.warning(
+                self, "Base indisponible",
+                "Le jeton Strava doit être enregistré dans le fichier de "
+                f"données, qui n'est pas utilisable.\n\n{health.detail}",
             )
-            ouvrir = box.addButton(
-                "Ouvrir la page Strava", QMessageBox.ButtonRole.AcceptRole
-            )
-            box.addButton("Fermer", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() is ouvrir:
-                launch_browser("https://www.strava.com/settings/api")
             return
+
+        from cairn.gui.strava_login import StravaLoginDialog
 
         with StravaClient(settings.strava_client_id, settings.strava_client_secret) as client:
             url = client.authorize_url(settings.strava_redirect_uri)
-        AuthorizeDialog(url, self).exec()
 
-    def _exchange_strava(self) -> None:
-        from cairn.config import get_settings
-        from cairn.sources.strava import StravaClient
-
-        code, accepted = QInputDialog.getText(
-            self,
-            "Code Strava",
-            "Collez la valeur du paramètre « code » présent dans l'adresse "
-            "de redirection :",
-        )
-        if not accepted or not code.strip():
+        dialog = StravaLoginDialog(url, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.code:
             return
+        self._exchange_strava(dialog.code)
+
+    def _exchange_strava(self, code: str) -> None:
+        """Échange le code contre un jeton. Il ne vaut que quelques minutes."""
+        from cairn.config import get_settings
 
         settings = get_settings()
 
         def task() -> str:
+            from cairn.sources.strava import StravaClient
+
             with StravaClient(settings.strava_client_id,
                               settings.strava_client_secret) as client:
-                token = client.exchange_code(code.strip())
+                token = client.exchange_code(code)
             athlete = token.get("athlete") or {}
             return f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
 
-        self._start(task, "Échange du code Strava")
+        self._start(task, "Connexion à Strava")
 
     def _start(self, task, label: str) -> None:
         if self._worker is not None:

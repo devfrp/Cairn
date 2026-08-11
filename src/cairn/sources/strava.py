@@ -188,15 +188,19 @@ class StravaClient:
         now = dt.datetime.now(dt.UTC)
         short_start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
         daily_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        with connection() as conn, conn.cursor() as cur:
-            cur.executemany(
+        # Écrit en SQLite : marqueurs `?`, `excluded.` et `datetime('now')`.
+        # Ce bloc datait de PostgreSQL et n'avait jamais été exécuté — aucun
+        # appel réel à Strava n'ayant eu lieu avant la première connexion, il a
+        # traversé la migration sans que rien ne le signale.
+        with connection() as conn:
+            conn.executemany(
                 """
                 INSERT INTO api_quota (source, window_kind, window_start, usage, limit_value)
-                VALUES ('strava', %s, %s, %s, %s)
+                VALUES ('strava', ?, ?, ?, ?)
                 ON CONFLICT (source, window_kind, window_start) DO UPDATE
-                   SET usage = EXCLUDED.usage,
-                       limit_value = EXCLUDED.limit_value,
-                       updated_at = now()
+                   SET usage       = excluded.usage,
+                       limit_value = excluded.limit_value,
+                       updated_at  = datetime('now')
                 """,
                 [
                     ("short", short_start, parsed.short_usage, parsed.short_limit),
