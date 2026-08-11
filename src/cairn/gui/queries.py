@@ -57,6 +57,47 @@ def probe() -> Health:
     return health
 
 
+# Une installation de schéma qui échoue échouera de la même façon à la
+# suivante : on ne réessaie pas trente secondes plus tard, indéfiniment.
+_schema_attempted: set[str] = set()
+
+
+def ensure_schema() -> Health:
+    """Installe le schéma s'il manque, puis retourne l'état de la base.
+
+    Le fichier appartient à l'application et les migrations sont rejouables :
+    rien ne justifie de réclamer un clic avant de pouvoir se servir de quoi
+    que ce soit. Jusqu'ici, une base neuve renvoyait l'utilisateur vers un
+    bouton qu'il devait deviner, et tout le reste — connexion Garmin comprise
+    — refusait de démarrer sans dire pourquoi.
+    """
+    health = probe()
+    if health.usable or not health.reachable:
+        return health
+
+    from cairn.config import get_settings
+
+    marker = str(get_settings().db_path)
+    if marker in _schema_attempted:
+        return health
+    _schema_attempted.add(marker)
+
+    try:
+        from cairn.migrate import upgrade
+
+        upgrade()
+    except Exception as exc:  # noqa: BLE001 — diagnostic, pas de propagation
+        health.detail = f"Installation du schéma impossible — {type(exc).__name__} : {exc}"
+        return health
+
+    return probe()
+
+
+def forget_schema_attempts() -> None:
+    """À appeler quand les réglages changent : la base visée n'est plus la même."""
+    _schema_attempted.clear()
+
+
 def _safe(query: str, params: tuple | None = None) -> list[dict[str, Any]]:
     try:
         return fetch_all(query, params)

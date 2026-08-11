@@ -150,30 +150,72 @@ def test_absence_de_jeton(monkeypatch) -> None:
 # ------------------------------------------------- connexion par ticket
 
 
+class FausseReponse:
+    def __init__(self, status: int = 200) -> None:
+        self.status_code = status
+        self.text = "oauth_token=jeton&oauth_token_secret=secret"
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.HTTPError(response=self)
+
+
+def session_qui_repond(status: int, journal: dict):
+    """Remplace la session OAuth1 et note l'adresse appelée."""
+
+    class Session:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def get(self, url: str, **_kwargs) -> FausseReponse:
+            journal["url"] = url
+            return FausseReponse(status)
+
+    return Session
+
+
 def test_ticket_echange_puis_persiste(monkeypatch) -> None:
-    """Le chemin nominal : le ticket devient deux jetons, qu'on enregistre."""
+    """Le chemin nominal, jusqu'à l'adresse réellement appelée."""
+    journal: dict[str, str] = {}
     enregistres: list[str] = []
-    monkeypatch.setattr(garmin.sso, "get_oauth1_token", lambda t, _c: f"oauth1:{t}")
+    monkeypatch.setattr(
+        garmin.sso, "GarminOAuth1Session", session_qui_repond(200, journal)
+    )
     monkeypatch.setattr(garmin.sso, "exchange", lambda o, _c, login: f"oauth2:{o}")
 
     client = GarminClient()
     monkeypatch.setattr(client, "_persist_token", lambda: enregistres.append("fait"))
     monkeypatch.setattr(type(client), "display_name", property(lambda _s: "Hélène"))
 
-    client.login_with_ticket("ST-0-abc")
+    client.login_with_ticket("ST-0-abc", "https://connect.garmin.com/modern")
 
-    assert client._client.oauth1_token == "oauth1:ST-0-abc"
-    assert client._client.oauth2_token == "oauth2:oauth1:ST-0-abc"
+    assert "ticket=ST-0-abc" in journal["url"]
+    assert "login-url=https://connect.garmin.com/modern" in journal["url"]
+    assert client._client.oauth1_token.oauth_token == "jeton"
     assert enregistres == ["fait"]
+
+
+def test_service_par_defaut_dans_ladresse(monkeypatch) -> None:
+    """Sans service observé, on retombe sur celui qu'on avait demandé."""
+    journal: dict[str, str] = {}
+    monkeypatch.setattr(
+        garmin.sso, "GarminOAuth1Session", session_qui_repond(200, journal)
+    )
+    monkeypatch.setattr(garmin.sso, "exchange", lambda o, _c, login: "oauth2")
+
+    client = GarminClient()
+    monkeypatch.setattr(client, "_persist_token", lambda: None)
+    monkeypatch.setattr(type(client), "display_name", property(lambda _s: "H"))
+    client.login_with_ticket("ST-1")
+
+    assert "login-url=https://mobile.integration.garmin.com/gcm/android" in journal["url"]
 
 
 def test_ticket_perime_le_dit_clairement(monkeypatch) -> None:
     """Un ticket ne vaut que quelques secondes : le message doit orienter vers
     une nouvelle connexion, pas laisser croire à une panne."""
     monkeypatch.setattr(
-        garmin.sso,
-        "get_oauth1_token",
-        lambda *_a: (_ for _ in ()).throw(http_error(401)),
+        garmin.sso, "GarminOAuth1Session", session_qui_repond(401, {})
     )
 
     with pytest.raises(GarminAuthRequired, match="ne sert qu'une fois"):
@@ -181,10 +223,10 @@ def test_ticket_perime_le_dit_clairement(monkeypatch) -> None:
 
 
 def test_429_pendant_lechange(monkeypatch) -> None:
+    """Le 429 vient de requests sans enveloppe garth : il doit être reconnu
+    quand même."""
     monkeypatch.setattr(
-        garmin.sso,
-        "get_oauth1_token",
-        lambda *_a: (_ for _ in ()).throw(http_error(429)),
+        garmin.sso, "GarminOAuth1Session", session_qui_repond(429, {})
     )
 
     with pytest.raises(GarminRateLimited):
@@ -208,3 +250,63 @@ def test_extraction_du_ticket(url: str, attendu: str | None) -> None:
     from cairn.gui.garmin_login import extract_ticket
 
     assert extract_ticket(url) == attendu
+
+
+# ------------------------------- service de redirection observé
+
+
+def test_service_transmis_a_lechange(monkeypatch) -> None:
+    """Garmin peut renvoyer le ticket ailleurs que là où on l'a demandé.
+
+    L'échange exige l'adresse exacte : c'est celle observée qui doit partir,
+    pas celle qu'on espérait.
+    """
+    vus: dict[str, str] = {}
+
+    def faux_echange(_self, ticket, service):
+        vus["ticket"] = ticket
+        vus["service"] = service or "(défaut)"
+        return "oauth1"
+
+    monkeypatch.setattr(GarminClient, "_oauth1_from_ticket", faux_echange)
+    monkeypatch.setattr(garmin.sso, "exchange", lambda o, _c, login: "oauth2")
+
+    client = GarminClient()
+    monkeypatch.setattr(client, "_persist_token", lambda: None)
+    monkeypatch.setattr(type(client), "display_name", property(lambda _s: "Hélène"))
+
+    client.login_with_ticket("ST-1", "https://connect.garmin.com/modern")
+
+    assert vus == {"ticket": "ST-1", "service": "https://connect.garmin.com/modern"}
+
+
+def test_service_par_defaut_si_non_observe(monkeypatch) -> None:
+    vus: dict[str, object] = {}
+    monkeypatch.setattr(
+        GarminClient,
+        "_oauth1_from_ticket",
+        lambda _s, t, service: vus.setdefault("service", service) or "oauth1",
+    )
+    monkeypatch.setattr(garmin.sso, "exchange", lambda o, _c, login: "oauth2")
+
+    client = GarminClient()
+    monkeypatch.setattr(client, "_persist_token", lambda: None)
+    monkeypatch.setattr(type(client), "display_name", property(lambda _s: "H"))
+    client.login_with_ticket("ST-2")
+
+    assert vus["service"] is None, "le défaut se décide dans l'échange, pas avant"
+
+
+@pytest.mark.parametrize(
+    ("url", "attendu"),
+    [
+        ("https://mobile.integration.garmin.com/gcm/android?ticket=ST-0",
+         "https://mobile.integration.garmin.com/gcm/android"),
+        ("https://connect.garmin.com/modern?ticket=ST-1&x=2",
+         "https://connect.garmin.com/modern"),
+    ],
+)
+def test_service_of(url: str, attendu: str) -> None:
+    from cairn.gui.garmin_login import service_of
+
+    assert service_of(url) == attendu

@@ -47,6 +47,17 @@ def extract_ticket(url: str) -> str | None:
     return value or None
 
 
+def service_of(url: str) -> str:
+    """Adresse à laquelle le ticket a été remis, sans ses paramètres.
+
+    Garmin ne s'engage pas à renvoyer vers le service demandé — il peut
+    rediriger ailleurs. L'échange du ticket exigeant l'adresse exacte, on
+    transmet celle qu'on a vue passer plutôt que celle qu'on avait réclamée.
+    """
+    parts = urlparse(url)
+    return f"{parts.scheme}://{parts.netloc}{parts.path}"
+
+
 class GarminLoginDialog(QDialog):
     """Connexion Garmin dans une fenêtre de navigateur intégrée."""
 
@@ -54,6 +65,7 @@ class GarminLoginDialog(QDialog):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.ticket: str | None = None
+        self.service: str | None = None
 
         self.setWindowTitle("Connexion à Garmin Connect")
         self.resize(560, 720)
@@ -90,12 +102,14 @@ class GarminLoginDialog(QDialog):
         self.view.setUrl(QUrl(signin_url(domain)))
 
     def _on_url(self, url: QUrl) -> None:
-        ticket = extract_ticket(url.toString())
+        raw = url.toString()
+        ticket = extract_ticket(raw)
         if ticket is None:
             return
         # Intercepté au changement d'adresse, donc avant que le navigateur ne
         # tente de charger une page qui n'existe pas.
         self.ticket = ticket
+        self.service = service_of(raw)
         self.view.stop()
         self.accept()
 
@@ -103,4 +117,4 @@ class GarminLoginDialog(QDialog):
 # Réexporté par commodité : la fenêtre et son réglage préalable se pensent
 # ensemble, même s'ils vivent dans deux modules pour ne pas mêler leurs
 # dépendances.
-__all__ = ["GarminLoginDialog", "extract_ticket", "prepare_webengine"]
+__all__ = ["GarminLoginDialog", "extract_ticket", "prepare_webengine", "service_of"]

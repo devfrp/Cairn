@@ -34,6 +34,7 @@ from collections.abc import Callable
 from typing import Any
 
 import garth
+import requests
 import structlog
 from garth import sso
 from garth.exc import GarthHTTPError
@@ -77,8 +78,15 @@ RATE_LIMITED = (
 )
 
 
-def _status_code(exc: GarthHTTPError) -> int | None:
+def _status_code(exc: Exception) -> int | None:
+    """Code HTTP d'une erreur, qu'elle vienne de garth ou de requests.
+
+    garth enveloppe l'erreur de requests ; l'échange du ticket, lui, appelle
+    requests directement et lève sans enveloppe.
+    """
     response = getattr(getattr(exc, "error", None), "response", None)
+    if response is None:
+        response = getattr(exc, "response", None)
     return getattr(response, "status_code", None)
 
 
@@ -148,19 +156,24 @@ class GarminClient:
         self._persist_token()
         log.info("garmin: authentification réussie", user=self.display_name)
 
-    def login_with_ticket(self, ticket: str) -> None:
+    def login_with_ticket(self, ticket: str, service: str | None = None) -> None:
         """Termine la connexion à partir du ticket délivré au navigateur.
 
         Garmin remet un « service ticket » à usage unique une fois
         l'identification faite. Il suffit à obtenir les jetons OAuth : ni le
         mot de passe ni le code de double authentification ne transitent par
         Cairn, qui ne les voit jamais.
+
+        `service` est l'adresse à laquelle Garmin a effectivement renvoyé le
+        ticket. Elle doit accompagner l'échange, sans quoi il est refusé — et
+        Garmin ne s'engage pas à réutiliser celle qu'on lui a demandée. On
+        transmet donc ce qu'on a observé plutôt que ce qu'on espérait.
         """
         try:
-            oauth1 = sso.get_oauth1_token(ticket, self._client)
+            oauth1 = self._oauth1_from_ticket(ticket, service)
             self._client.oauth1_token = oauth1
             self._client.oauth2_token = sso.exchange(oauth1, self._client, login=True)
-        except GarthHTTPError as exc:
+        except (GarthHTTPError, requests.HTTPError) as exc:
             if _status_code(exc) == 429:
                 raise GarminRateLimited(RATE_LIMITED) from exc
             raise GarminAuthRequired(
@@ -171,6 +184,28 @@ class GarminClient:
 
         self._persist_token()
         log.info("garmin: authentification réussie", user=self.display_name)
+
+    def _oauth1_from_ticket(self, ticket: str, service: str | None):
+        """Échange le ticket contre un jeton OAuth1.
+
+        Repris de `garth.sso.get_oauth1_token`, à une différence près :
+        l'adresse de service y est figée, alors qu'elle doit correspondre à
+        celle pour laquelle le ticket a été émis.
+        """
+        from urllib.parse import parse_qs
+
+        target = service or SERVICE_URL.format(domain=self.domain)
+        session = sso.GarminOAuth1Session(parent=self._client.sess)
+        url = (
+            f"https://connectapi.{self.domain}/oauth-service/oauth/preauthorized"
+            f"?ticket={ticket}&login-url={target}&accepts-mfa-tokens=true"
+        )
+        response = session.get(
+            url, headers=sso.OAUTH_USER_AGENT, timeout=self._client.timeout
+        )
+        response.raise_for_status()
+        fields = {k: v[0] for k, v in parse_qs(response.text).items()}
+        return sso.OAuth1Token(domain=self.domain, **fields)
 
     def load_saved(self) -> None:
         """Restaure la session depuis la base. Lève si aucun token valable."""

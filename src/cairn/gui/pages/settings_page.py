@@ -469,6 +469,9 @@ class SettingsPage(QWidget):
                 "discord_webhook_url": self.discord_url.text().strip(),
             }
         )
+        # La base visée peut avoir changé : une tentative d'installation
+        # infructueuse sur l'ancienne ne doit pas condamner la nouvelle.
+        queries.forget_schema_attempts()
         self.settings_changed.emit()
         self._test_connection()
 
@@ -532,12 +535,15 @@ class SettingsPage(QWidget):
             return
 
         self.save_values()
-        health = queries.probe()
+        # Le jeton se range dans le fichier de données : on s'assure qu'il est
+        # prêt, en l'installant au besoin plutôt qu'en renvoyant l'utilisateur
+        # vers un bouton.
+        health = queries.ensure_schema()
         if not health.usable:
             QMessageBox.warning(
                 self, "Base indisponible",
-                "Le jeton Garmin est conservé dans le fichier de données : "
-                "installez d'abord le schéma.",
+                "Le jeton Garmin doit être enregistré dans le fichier de "
+                f"données, qui n'est pas utilisable.\n\n{health.detail}",
             )
             return
 
@@ -551,7 +557,7 @@ class SettingsPage(QWidget):
 
         # Le ticket ne vaut que quelques secondes : l'échange part aussitôt,
         # dans un fil séparé pour ne pas figer la fenêtre.
-        worker = GarminLoginWorker(dialog.ticket, domain, self)
+        worker = GarminLoginWorker(dialog.ticket, domain, dialog.service, self)
         self._worker = worker
         self.btn_garmin.setEnabled(False)
         worker.succeeded.connect(self._garmin_ok)
@@ -568,7 +574,7 @@ class SettingsPage(QWidget):
         QMessageBox.critical(self, "Connexion Garmin échouée", message)
 
     def _garmin_rate_limited(self, message: str) -> None:
-        """Garmin temporise : le mot de passe reste saisi pour réessayer.
+        """Garmin temporise : rien n'est cassé, il n'y a qu'à attendre.
 
         Une croix rouge et le mot « échouée » enverraient vérifier des
         identifiants qui n'ont rien à se reprocher.
@@ -582,8 +588,26 @@ class SettingsPage(QWidget):
 
         settings = get_settings()
         if not settings.strava_client_id or not settings.strava_client_secret:
-            QMessageBox.warning(self, "Identifiants manquants",
-                                "Renseignez l'identifiant et le secret client Strava.")
+            # Dire ce qui manque ne suffit pas : ces deux valeurs viennent
+            # d'une application à créer chez Strava, ce que rien n'indique.
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Identifiants Strava manquants")
+            box.setText(
+                "Strava demande de déclarer une application pour donner accès "
+                "à vos données.\n\n"
+                "Créez-en une, puis recopiez ci-dessus « Client ID » et "
+                "« Client Secret ». Indiquez « localhost » comme domaine de "
+                "rappel : Cairn n'a pas de serveur, vous recopierez le code "
+                "depuis la barre d'adresse."
+            )
+            ouvrir = box.addButton(
+                "Ouvrir la page Strava", QMessageBox.ButtonRole.AcceptRole
+            )
+            box.addButton("Fermer", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is ouvrir:
+                launch_browser("https://www.strava.com/settings/api")
             return
 
         with StravaClient(settings.strava_client_id, settings.strava_client_secret) as client:

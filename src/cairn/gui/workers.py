@@ -76,11 +76,12 @@ class GarminLoginWorker(QThread):
     rate_limited = Signal(str)
     done = Signal()
 
-    def __init__(self, ticket: str, domain: str,
+    def __init__(self, ticket: str, domain: str, service: str | None = None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._ticket = ticket
         self._domain = domain
+        self._service = service
 
     def run(self) -> None:
         from cairn.sources.garmin import (
@@ -91,7 +92,7 @@ class GarminLoginWorker(QThread):
 
         try:
             client = GarminClient(domain=self._domain)
-            client.login_with_ticket(self._ticket)
+            client.login_with_ticket(self._ticket, self._service)
             name = client.display_name
         except GarminRateLimited as exc:
             self.rate_limited.emit(str(exc))
