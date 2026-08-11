@@ -177,6 +177,24 @@ jobs:
           cat > "$APPDIR/AppRun" <<'EOF'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
+
+          # La bibliothèque C++ n'est délibérément pas embarquée : masquer
+          # celle du système empêche ses pilotes graphiques de se charger, et
+          # l'application meurt à l'ouverture de la fenêtre de connexion. En
+          # contrepartie, celle de la machine doit être assez récente. Le dire
+          # vaut mieux que de planter sans explication.
+          for candidat in /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+                          /usr/lib64/libstdc++.so.6 /usr/lib/libstdc++.so.6; do
+              [ -e "$candidat" ] || continue
+              if ! strings "$candidat" 2>/dev/null | grep -q GLIBCXX_3.4.30; then
+                  echo "Cairn : la bibliothèque C++ de ce système est trop" >&2
+                  echo "ancienne (GLIBCXX_3.4.30 requis, fourni par GCC 12)." >&2
+                  echo "Distribution trop âgée : installez depuis les sources." >&2
+                  exit 1
+              fi
+              break
+          done
+
           # Lancée sous le nom « cairn », l'AppImage donne la ligne de
           # commande ; sinon, l'application graphique.
           case "$(basename "$ARGV0" 2>/dev/null || echo Cairn)" in

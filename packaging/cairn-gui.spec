@@ -96,19 +96,26 @@ a = Analysis(
 # Bibliothèques à ne jamais emporter : elles doivent venir de la machine qui
 # exécute l'application, pas de celle qui l'a compilée.
 #
-# Elles dialoguent avec le pilote graphique et le serveur d'affichage. Compilée
-# sur Ubuntu, l'application emportait un `libgbm` et un `libxcb-glx` qui
-# prenaient le pas sur ceux de l'utilisateur : sur une machine au pilote plus
-# récent, Qt échouait à initialiser OpenGL et le processus était tué à
-# l'ouverture de la fenêtre de connexion Garmin. Rien de tout cela ne se voit à
-# la compilation, ni même sur la machine qui compile.
-DRIVER_COUPLED = (
+# **La bibliothèque C++ d'abord.** Compilée sur Ubuntu 22.04, l'application
+# emportait un `libstdc++` qui masquait celui de l'utilisateur. Les pilotes
+# graphiques d'une distribution récente sont construits contre une version plus
+# neuve : ils ne se chargent plus, EGL devient indisponible, et le processus est
+# tué à l'ouverture de la fenêtre de connexion Garmin. Mesuré : la même AppImage
+# lancée avec le `libstdc++` du système affiche la page sans broncher.
+#
+# **Ensuite tout ce qui parle au pilote graphique ou au serveur d'affichage.**
+# Même raisonnement, et même symptôme.
+#
+# Rien de tout cela ne se voit à la compilation, ni même sur la machine qui
+# compile — dont les bibliothèques concordent forcément.
+SYSTEM_PROVIDED = (
+    "libstdc++.so", "libgcc_s.so",
     "libGL.so", "libGLX", "libGLdispatch", "libOpenGL.so", "libEGL.so",
     "libglapi.so", "libgbm.so", "libdrm.so", "libgallium",
     "libxcb-glx.so", "libxcb-dri2.so", "libxcb-dri3.so", "libxcb-present.so",
 )
 
-_ecartees = [b for b in a.binaries if any(nom in b[0] for nom in DRIVER_COUPLED)]
+_ecartees = [b for b in a.binaries if any(nom in b[0] for nom in SYSTEM_PROVIDED)]
 for nom, *_ in _ecartees:
     print(f"[cairn] non embarqué (fourni par le système) : {nom}")
 a.binaries = [b for b in a.binaries if b not in _ecartees]
@@ -155,7 +162,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Cairn",
             "CFBundleDisplayName": "Cairn",
-            "CFBundleShortVersionString": "0.1.2",
+            "CFBundleShortVersionString": "0.1.3",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
         },
