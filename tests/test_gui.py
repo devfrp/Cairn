@@ -184,3 +184,62 @@ class TestPrefs:
         (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
         assert prefs.is_portable() is True
         assert "Mode portable" in prefs.describe_location()
+
+
+class TestTableauDeBordSansToutesLesMesures:
+    """Une montre qui ne mesure pas tout ne doit pas ressembler à une panne.
+
+    Aucun appareil ne fournit l'ensemble des métriques. Les cartes liaient
+    pourtant la durée de sommeil à un score que beaucoup de montres ne
+    calculent pas, et la bande « variabilité cardiaque » gardait sa hauteur et
+    son titre sans la moindre courbe.
+    """
+
+    def page(self, qt_app, recovery, load=None, fitness=None):
+        from cairn.gui import queries
+        from cairn.gui.pages.dashboard import DashboardPage
+
+        page = DashboardPage()
+        page._fill_recovery(recovery)
+        for cle, series in (
+            ("hrv", recovery.hrv_series),
+            ("rhr", recovery.rhr_series),
+            ("load", (load or queries.Load()).daily_series),
+        ):
+            label, spark = page.trend_rows[cle]
+            renseignee = any(v is not None for v in series)
+            label.setVisible(renseignee)
+            spark.setVisible(renseignee)
+        return page
+
+    def test_duree_affichee_sans_score(self, qt_app):
+        from cairn.gui.queries import Recovery
+
+        page = self.page(qt_app, Recovery(sleep_duration_s=28800, sleep_score=None))
+
+        assert "8 h" in page.sleep.value.text()
+        assert "score" in page.sleep.hint.text().lower()
+
+    def test_aucune_nuit_du_tout(self, qt_app):
+        from cairn.gui.queries import Recovery
+
+        page = self.page(qt_app, Recovery())
+
+        assert page.sleep.value.text() == "—"
+        assert "Pas encore" in page.sleep.hint.text()
+
+    def test_vfc_absente_mais_autres_mesures_presentes(self, qt_app):
+        """Le message doit distinguer « pas encore » de « jamais »."""
+        from cairn.gui.queries import Recovery
+
+        page = self.page(qt_app, Recovery(rhr_series=[48, 47, 49], hrv_series=[None] * 3))
+
+        assert "non fournie" in page.hrv.hint.text()
+
+    def test_bande_vfc_masquee_sans_serie(self, qt_app):
+        from cairn.gui.queries import Recovery
+
+        page = self.page(qt_app, Recovery(rhr_series=[48, 47], hrv_series=[None, None]))
+
+        assert page.trend_rows["hrv"][0].isHidden()
+        assert not page.trend_rows["rhr"][0].isHidden()

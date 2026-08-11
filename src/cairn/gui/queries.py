@@ -412,15 +412,25 @@ def fitness(days: int = 90) -> Fitness:
 
 
 def active_flags(days: int = 10) -> list[dict[str, Any]]:
-    """Signaux récents non acquittés, du plus grave au plus récent."""
+    """Signaux récents non acquittés, du plus grave au plus récent.
+
+    Un seul par nature : une charge trop élevée pendant plusieurs jours
+    produit un signal par jour, et les empiler affichait quatre fois la même
+    phrase à un chiffre près. C'est la plus récente qui vaut.
+    """
     return _safe(
         """
         SELECT day, kind, severity, message
-          FROM marts_flag
+          FROM marts_flag f
          WHERE acknowledged = 0
            AND day > date('now', 'localtime', ? || ' days')
+           AND day = (
+                 SELECT max(g.day) FROM marts_flag g
+                  WHERE g.kind = f.kind AND g.acknowledged = 0
+                    AND g.day > date('now', 'localtime', ? || ' days')
+               )
          ORDER BY CASE severity WHEN 'alert' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
                   day DESC
         """,
-        (-days,),
+        (-days, -days),
     )

@@ -94,16 +94,21 @@ class DashboardPage(QWidget):
         self.rhr_spark = Sparkline()
         self.load_spark = Sparkline()
 
-        for caption, spark, colour in (
-            ("Variabilité cardiaque", self.hrv_spark, theme.SERIES[1]),
-            ("FC de repos", self.rhr_spark, theme.SERIES[2]),
-            ("Charge quotidienne", self.load_spark, theme.ACCENT),
+        # Le libellé est retenu avec sa courbe : une série que la montre ne
+        # fournit pas laissait sa bande vide à l'écran, titre compris, comme
+        # si l'affichage était cassé.
+        self.trend_rows = {}
+        for cle, caption, spark, colour in (
+            ("hrv", "Variabilité cardiaque", self.hrv_spark, theme.SERIES[1]),
+            ("rhr", "FC de repos", self.rhr_spark, theme.SERIES[2]),
+            ("load", "Charge quotidienne", self.load_spark, theme.ACCENT),
         ):
             label = QLabel(caption)
             label.setObjectName("CardHint")
             trends.layout().addWidget(label)
             spark.set_values([], colour)
             trends.layout().addWidget(spark)
+            self.trend_rows[cle] = (label, spark)
 
         layout.addWidget(trends)
 
@@ -253,6 +258,16 @@ class DashboardPage(QWidget):
         self.rhr_spark.set_values(recovery.rhr_series, theme.SERIES[2])
         self.load_spark.set_values(load.daily_series, theme.ACCENT)
 
+        for cle, series in (
+            ("hrv", recovery.hrv_series),
+            ("rhr", recovery.rhr_series),
+            ("load", load.daily_series),
+        ):
+            label, spark = self.trend_rows[cle]
+            renseignee = any(v is not None for v in series)
+            label.setVisible(renseignee)
+            spark.setVisible(renseignee)
+
         if not any(v for v in load.daily_series) and recovery.hrv is None:
             self.empty_notice.setText(
                 "Aucune donnée pour l'instant. Lancez une synchronisation "
@@ -262,7 +277,14 @@ class DashboardPage(QWidget):
 
     def _fill_recovery(self, recovery: queries.Recovery) -> None:
         if recovery.hrv is None:
-            self.hrv.set_value("—", "Pas encore de mesure")
+            # « Pas encore » laisse espérer une mesure à venir. Si d'autres
+            # relevés de la même période sont arrivés, c'est que la montre ne
+            # mesure simplement pas la variabilité : autant le dire.
+            releve = any(v is not None for v in recovery.rhr_series)
+            self.hrv.set_value(
+                "—",
+                "non fournie par votre montre" if releve else "Pas encore de mesure",
+            )
         else:
             status = (recovery.hrv_status or "").lower()
             colour = {
@@ -278,7 +300,14 @@ class DashboardPage(QWidget):
                 colour,
             )
 
-        if recovery.sleep_score is None:
+        if recovery.sleep_score is None and recovery.sleep_duration_s:
+            # Toutes les montres ne calculent pas de score. La durée mesurée
+            # vaut mieux qu'un tiret : c'est elle qu'on regarde en premier.
+            self.sleep.set_value(
+                format_duration(recovery.sleep_duration_s),
+                "dernière nuit · score non fourni par la montre",
+            )
+        elif recovery.sleep_score is None:
             self.sleep.set_value("—", "Pas encore de nuit enregistrée")
         else:
             colour = (
