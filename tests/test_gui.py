@@ -1,6 +1,7 @@
 """Tests de la couche graphique : formatage, modèle de table, réglages."""
 
 import datetime as dt
+import pathlib
 
 import pytest
 
@@ -627,7 +628,7 @@ class TestDetailDUneSortie:
     def test_sortie_sans_flux(self, base):
         from cairn.gui import queries
 
-        assert queries.activity_streams(999) == {"labels": [], "series": {}}
+        assert queries.activity_streams(999) == {"labels": [], "track": [], "series": {}}
 
     def test_fenetre_montre_les_courbes(self, qt_app, base):
         from cairn.gui.pages.activity_detail import ActivityDetailDialog
@@ -1405,3 +1406,205 @@ class TestSynchronisationAuDemarrage:
         (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
 
         assert prefs.load_option("sync_au_demarrage") is False
+
+
+class TestTraceDUneSortie:
+    """Soixante-dix mille points géolocalisés dormaient en base.
+
+    Le tracé est dessiné à partir des seules coordonnées : ni tuiles, ni clé
+    d'API, ni appel réseau. Cairn tient dans son dossier et fonctionne hors
+    ligne — aller chercher des images ailleurs contredirait les deux.
+    """
+
+    def carte(self, qt_app, points):
+        from cairn.gui.widgets import TrackMap
+
+        carte = TrackMap()
+        carte.set_track(points)
+        carte.resize(300, 200)
+        return carte
+
+    def test_trace_reconnu(self, qt_app):
+        carte = self.carte(qt_app, [(48.81, -3.47), (48.82, -3.46), (48.83, -3.45)])
+
+        assert carte.has_track()
+
+    def test_sortie_sans_coordonnees(self, qt_app):
+        """Un tapis de course n'a pas de parcours : rien ne doit s'afficher."""
+        carte = self.carte(qt_app, [(None, None)] * 50)
+
+        assert not carte.has_track()
+
+    def test_longitude_resserree_par_la_latitude(self, qt_app):
+        """Un degré de longitude vaut deux tiers de degré de latitude ici.
+
+        L'ignorer étire le parcours d'une bonne moitié en largeur : une boucle
+        ronde devient un ovale couché.
+        """
+        import math
+
+        carte = self.carte(qt_app, [(48.80, -3.50), (48.81, -3.49)])
+        transform = carte._transform()
+
+        assert transform is not None
+        assert transform[1] == pytest.approx(math.cos(math.radians(48.805)), rel=1e-3)
+
+    def test_meme_echelle_sur_les_deux_axes(self, qt_app):
+        """Deux échelles déformeraient le parcours : une boucle n'en serait plus une."""
+        # Emprise deux fois plus large que haute, dans un cadre carré.
+        carte = self.carte(qt_app, [(48.80, -3.50), (48.81, -3.46)])
+        carte.resize(200, 200)
+
+        a = carte._screen((48.80, -3.50), carte._transform())
+        b = carte._screen((48.81, -3.46), carte._transform())
+        # La diagonale doit rester inscrite dans le cadre, sans l'emplir en
+        # hauteur : c'est la largeur qui contraint.
+        assert abs(b[0] - a[0]) > abs(b[1] - a[1])
+        assert min(a[1], b[1]) >= 0 and max(a[1], b[1]) <= 200
+
+    def test_aller_retour_ne_divise_pas_par_zero(self, qt_app):
+        """Une ligne droite plein nord a une emprise nulle en longitude."""
+        carte = self.carte(qt_app, [(48.80, -3.50), (48.81, -3.50), (48.82, -3.50)])
+
+        assert carte._transform() is not None
+
+    def test_marqueur_suit_lindice(self, qt_app):
+        carte = self.carte(qt_app, [(48.80, -3.50), (48.81, -3.49)])
+        carte.set_marker(1)
+
+        assert carte._marker == 1
+
+    def test_le_flux_porte_les_coordonnees(self):
+        """Tracé et courbes partagent l'échantillonnage : même indice, même instant."""
+        from cairn.gui.queries import activity_streams
+
+        vide = activity_streams(999999)
+        assert vide["track"] == []
+
+
+class TestCalendrierDeCharge:
+    """Ce que la charge par semaine ne montre pas : où sont les coupures."""
+
+    def calendrier(self, qt_app, jours, charges):
+        from cairn.gui.widgets import LoadCalendar
+
+        cal = LoadCalendar()
+        cal.set_data(jours, charges)
+        cal.resize(800, cal.heightForWidth(800))
+        return cal
+
+    def annee(self):
+        debut = dt.date(2026, 1, 1)
+        return [(debut + dt.timedelta(days=i)).isoformat() for i in range(365)]
+
+    def test_toutes_les_lignes_tiennent_dans_le_cadre(self, qt_app):
+        """La hauteur découle de la largeur : sinon la dernière ligne sortait."""
+        cal = self.calendrier(qt_app, self.annee(), [10] * 365)
+
+        dernier = cal._rect_of(364)
+        assert dernier.bottom() <= cal.heightForWidth(800)
+
+    def test_les_cases_se_serrent_quand_la_fenetre_retrecit(self, qt_app):
+        cal = self.calendrier(qt_app, self.annee(), [10] * 365)
+
+        assert cal._cell_for(1000) > cal._cell_for(500)
+        assert cal._cell_for(200) >= 4.0
+
+    def test_la_premiere_colonne_respecte_le_jour_de_la_semaine(self, qt_app):
+        """1er janvier 2026 : un jeudi, donc quatrième ligne."""
+        cal = self.calendrier(qt_app, self.annee(), [10] * 365)
+
+        assert cal._first_column_offset() == 3
+
+    def test_un_jour_sans_charge_se_distingue_dun_jour_charge(self, qt_app):
+        cal = self.calendrier(qt_app, self.annee(), [0] * 365)
+
+        assert cal._tone(0, 100).name() != cal._tone(100, 100).name()
+
+    def test_teinte_bornee_a_lopacite_maximale(self, qt_app):
+        """Au-delà de 255, Qt refuse la valeur et crie."""
+        cal = self.calendrier(qt_app, self.annee(), [100] * 365)
+
+        assert cal._tone(100, 100).alpha() <= 255
+
+    def test_calendrier_vide_ne_leve_pas(self, qt_app):
+        cal = self.calendrier(qt_app, [], [])
+
+        assert cal._columns() >= 1
+
+
+class TestExportCsv:
+    """Un export ouvre la porte à Grafana sans que Cairn devienne un serveur."""
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            conn.execute(
+                """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                         local_date, sport, sport_family, elapsed_s,
+                                         distance_m, primary_source, name)
+                   VALUES (1, 1, '2026-07-01T08:00:00+00:00', '2026-07-01 10:00:00',
+                           '2026-07-01', 'road', 'cycling', 3600, 24000,
+                           'garmin', 'Sortie dénivelée')"""
+            )
+        yield tmp_path
+        db.close_pool()
+        reset_settings()
+
+    def test_deux_tableaux_ecrits(self, base):
+        from cairn.gui.queries import export_csv
+
+        resultat = export_csv(str(base / "export"))
+
+        assert set(resultat) == {"sorties", "journalier"}
+        assert resultat["sorties"]["rows"] == 1
+
+    def test_accents_lisibles_par_un_tableur(self, base):
+        """Sans marque d'ordre des octets, Excel rend « dénivelé » illisible."""
+        from cairn.gui.queries import export_csv
+
+        resultat = export_csv(str(base / "export"))
+        brut = pathlib.Path(resultat["sorties"]["path"]).read_bytes()
+
+        assert brut.startswith(b"\xef\xbb\xbf")
+        assert "dénivelée" in brut.decode("utf-8-sig")
+
+    def test_separateur_standard(self, base):
+        """La virgule, ce qu'attendent pandas et Grafana."""
+        from cairn.gui.queries import export_csv
+
+        resultat = export_csv(str(base / "export"))
+        entete = pathlib.Path(resultat["sorties"]["path"]).read_text(
+            encoding="utf-8-sig"
+        ).splitlines()[0]
+
+        assert entete.count(",") > 5
+
+    def test_le_dossier_est_cree(self, base):
+        from cairn.gui.queries import export_csv
+
+        cible = base / "profond" / "encore"
+        export_csv(str(cible))
+
+        assert (cible / "cairn-journalier.csv").exists()
+
+    def test_une_colonne_par_mesure_quotidienne(self, base):
+        from cairn.gui.pages.dashboard import CHAMPS_JOUR
+        from cairn.gui.queries import export_csv
+
+        resultat = export_csv(str(base / "export"))
+        entete = pathlib.Path(resultat["journalier"]["path"]).read_text(
+            encoding="utf-8-sig"
+        ).splitlines()[0]
+
+        for champ in CHAMPS_JOUR:
+            assert champ.key in entete

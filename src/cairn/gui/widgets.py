@@ -385,6 +385,340 @@ class ColumnChart(QWidget):
         painter.end()
 
 
+class LoadCalendar(QWidget):
+    """Une case par jour, teintée selon la charge — une année d'un coup d'œil.
+
+    Les colonnes sont les semaines, les lignes les jours : la lecture verticale
+    donne la semaine, l'horizontale la régularité. Ce que la charge par semaine
+    ne montre pas, c'est où sont les coupures et si l'entraînement s'est
+    concentré sur deux jours ou étalé sur cinq.
+
+    Les teintes sont discrètes plutôt que continues : l'œil compare mal deux
+    nuances proches, et cinq paliers se lisent sans échelle.
+    """
+
+    GAP = 3
+    LEFT = 26
+    TOP = 16
+    PALIERS = 4
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._days: list[str] = []
+        self._loads: list[float] = []
+        self._hover: int | None = None
+        self.setMouseTracking(True)
+        # La hauteur découle de la largeur : les cases sont carrées et se
+        # serrent quand la fenêtre rétrécit. C'est le mécanisme prévu par Qt
+        # pour cela — s'en remettre à `resizeEvent` laissait la mise en page
+        # calculer la hauteur avant d'avoir donné la largeur, et la dernière
+        # ligne de jours se peignait hors du cadre.
+        politique = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        politique.setHeightForWidth(True)
+        self.setSizePolicy(politique)
+
+    def set_data(self, days: list[str], loads: list[float | None]) -> None:
+        self._days = list(days)
+        self._loads = [float(v or 0) for v in loads]
+        self._hover = None
+        self.update()
+
+    # -- géométrie -------------------------------------------------------
+
+    def _first_column_offset(self) -> int:
+        """Jour de la semaine du premier jour affiché, lundi valant zéro."""
+        if not self._days:
+            return 0
+        try:
+            return dt.date.fromisoformat(self._days[0][:10]).weekday()
+        except ValueError:
+            return 0
+
+    def _columns(self) -> int:
+        return max(1, -(-(len(self._days) + self._first_column_offset()) // 7))
+
+    def _cell_for(self, width: int) -> float:
+        # La case s'ajuste à la largeur disponible plutôt que d'imposer la
+        # sienne : une année tient dans la fenêtre quelle que soit sa taille.
+        utile = max(1, width - self.LEFT - 4)
+        return max(4.0, min(15.0, utile / self._columns() - self.GAP))
+
+    def _cell(self) -> float:
+        return self._cell_for(self.width())
+
+    def _height_for(self, cote: float) -> int:
+        return int(self.TOP + 7 * (cote + self.GAP) + 4)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 — API Qt
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 — API Qt
+        return self._height_for(self._cell_for(width))
+
+    def _rect_of(self, index: int) -> QRectF:
+        cote = self._cell()
+        pas = cote + self.GAP
+        position = index + self._first_column_offset()
+        return QRectF(
+            self.LEFT + (position // 7) * pas,
+            self.TOP + (position % 7) * pas,
+            cote,
+            cote,
+        )
+
+    def _index_at(self, x: float, y: float) -> int | None:
+        for index in range(len(self._days)):
+            if self._rect_of(index).adjusted(0, 0, self.GAP, self.GAP).contains(x, y):
+                return index
+        return None
+
+    def sizeHint(self):  # noqa: N802 — API Qt
+        from PySide6.QtCore import QSize
+
+        return QSize(self.width() or 720, self._height_for(self._cell()))
+
+    def minimumSizeHint(self):  # noqa: N802 — API Qt
+        from PySide6.QtCore import QSize
+
+        return QSize(self.LEFT + self._columns() * 5, self._height_for(4.0))
+
+    # -- interaction -----------------------------------------------------
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        index = self._index_at(event.position().x(), event.position().y())
+        if index != self._hover:
+            self._hover = index
+            if index is not None:
+                self.setToolTip(
+                    f"{format_long_day(self._days[index])} — "
+                    f"charge {self._loads[index]:.0f}"
+                )
+            else:
+                self.setToolTip("")
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        self._hover = None
+        self.update()
+
+    # -- rendu -----------------------------------------------------------
+
+    def _tone(self, load: float, maximum: float) -> QColor:
+        if load <= 0:
+            return QColor(theme.SURFACE_ALT)
+        palier = min(self.PALIERS, max(1, int(load / maximum * self.PALIERS + 0.999)))
+        # Le palier le plus haut doit rester en deçà de l'opacité maximale :
+        # 255 est la borne, et la dépasser d'un cran fait crier Qt.
+        return theme.qcolor(theme.ACCENT, 60 + palier * 48)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
+        if not self._days:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = painter.font()
+        font.setPointSizeF(max(7.0, font.pointSizeF() - 3))
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        maximum = max(self._loads, default=0) or 1.0
+        cote = self._cell()
+
+        # Initiales des jours, une ligne sur deux pour ne pas surcharger.
+        painter.setPen(QColor(theme.MUTED))
+        for ligne, initiale in enumerate(("L", "", "M", "", "V", "", "D")):
+            if initiale:
+                painter.drawText(
+                    2,
+                    int(self.TOP + ligne * (cote + self.GAP) + cote / 2 + metrics.ascent() / 2),
+                    initiale,
+                )
+
+        mois_vu = ""
+        for index, jour in enumerate(self._days):
+            rect = self._rect_of(index)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._tone(self._loads[index], maximum))
+            painter.drawRoundedRect(rect, 2, 2)
+
+            if index == self._hover:
+                painter.setPen(QPen(QColor(theme.TEXT), 1.2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(rect, 2, 2)
+
+            # Étiquette du mois au-dessus de sa première semaine.
+            mois = jour[:7]
+            if mois != mois_vu and dt.date.fromisoformat(jour[:10]).day <= 7:
+                mois_vu = mois
+                painter.setPen(QColor(theme.MUTED))
+                painter.drawText(int(rect.left()), int(self.TOP - 4), _MOIS_COURTS[
+                    int(jour[5:7]) - 1
+                ])
+        painter.end()
+
+
+# Trois lettres suffisent au-dessus d'une colonne de quinze pixels.
+_MOIS_COURTS = ("jan", "fév", "mar", "avr", "mai", "juin",
+                "juil", "août", "sep", "oct", "nov", "déc")
+
+
+class TrackMap(QWidget):
+    """Tracé d'une sortie, dessiné à partir des seules coordonnées.
+
+    Sans fond de carte : ni tuiles, ni clé d'API, ni appel réseau. Cairn tient
+    dans son dossier et fonctionne hors ligne — aller chercher des images
+    ailleurs contredirait les deux. La forme du parcours suffit d'ailleurs à
+    le reconnaître, et c'est le point survolé qui apporte l'information.
+
+    La longitude est resserrée par le cosinus de la latitude : un degré de
+    longitude vaut deux tiers de degré de latitude sous nos latitudes, et
+    l'ignorer étire le parcours d'une bonne moitié en largeur.
+    """
+
+    MARGIN = 10
+    point_hovered = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._points: list[tuple[float, float] | None] = []
+        self._marker: int | None = None
+        self.setMinimumHeight(200)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_track(self, points: list[tuple[float | None, float | None]]) -> None:
+        self._points = [
+            (float(lat), float(lon)) if lat is not None and lon is not None else None
+            for lat, lon in points
+        ]
+        self._marker = None
+        self.update()
+
+    def has_track(self) -> bool:
+        return sum(1 for p in self._points if p is not None) >= 2
+
+    def set_marker(self, index: int | None) -> None:
+        if index != self._marker:
+            self._marker = index
+            self.update()
+
+    # -- projection ------------------------------------------------------
+
+    def _transform(self) -> tuple[float, float, float, float, float] | None:
+        """Échelle et décalage pour inscrire le tracé dans le cadre."""
+        connus = [p for p in self._points if p is not None]
+        if len(connus) < 2:
+            return None
+
+        import math
+
+        lats = [p[0] for p in connus]
+        lons = [p[1] for p in connus]
+        cos_lat = max(0.05, math.cos(math.radians(sum(lats) / len(lats))))
+
+        largeur_geo = (max(lons) - min(lons)) * cos_lat
+        hauteur_geo = max(lats) - min(lats)
+        # Un aller-retour sur une ligne droite a une emprise nulle dans un des
+        # deux sens : sans plancher, l'échelle partirait à l'infini.
+        largeur_geo = max(largeur_geo, 1e-6)
+        hauteur_geo = max(hauteur_geo, 1e-6)
+
+        utile_x = max(1.0, self.width() - 2 * self.MARGIN)
+        utile_y = max(1.0, self.height() - 2 * self.MARGIN)
+        # Une seule échelle pour les deux axes : deux échelles déformeraient
+        # le parcours, et une boucle ne ressemblerait plus à rien.
+        echelle = min(utile_x / largeur_geo, utile_y / hauteur_geo)
+
+        decalage_x = self.MARGIN + (utile_x - largeur_geo * echelle) / 2
+        decalage_y = self.MARGIN + (utile_y - hauteur_geo * echelle) / 2
+        return echelle, cos_lat, min(lons), max(lats), (decalage_x, decalage_y)
+
+    def _screen(self, point: tuple[float, float], transform) -> tuple[float, float]:
+        echelle, cos_lat, lon_min, lat_max, (dx, dy) = transform
+        x = dx + (point[1] - lon_min) * cos_lat * echelle
+        # La latitude croît vers le nord, l'ordonnée de l'écran vers le bas.
+        y = dy + (lat_max - point[0]) * echelle
+        return x, y
+
+    # -- interaction -----------------------------------------------------
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        transform = self._transform()
+        if transform is None:
+            return
+        cible = (event.position().x(), event.position().y())
+        meilleur, distance_min = None, 400.0   # vingt pixels, au carré
+        for index, point in enumerate(self._points):
+            if point is None:
+                continue
+            x, y = self._screen(point, transform)
+            distance = (x - cible[0]) ** 2 + (y - cible[1]) ** 2
+            if distance < distance_min:
+                meilleur, distance_min = index, distance
+        if meilleur != self._marker:
+            self.set_marker(meilleur)
+            self.point_hovered.emit(-1 if meilleur is None else meilleur)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 — API Qt
+        self.set_marker(None)
+        self.point_hovered.emit(-1)
+
+    # -- rendu -----------------------------------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
+        transform = self._transform()
+        if transform is None:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        path = QPainterPath()
+        started = False
+        premier = dernier = None
+        for point in self._points:
+            if point is None:
+                # Un tunnel ou une perte de signal ne se relie pas par une
+                # ligne droite : elle inventerait un passage jamais emprunté.
+                started = False
+                continue
+            x, y = self._screen(point, transform)
+            if started:
+                path.lineTo(x, y)
+            else:
+                path.moveTo(x, y)
+                started = True
+            if premier is None:
+                premier = (x, y)
+            dernier = (x, y)
+
+        pen = QPen(QColor(theme.ACCENT))
+        pen.setWidthF(2.2)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        if premier:
+            painter.setBrush(QColor(theme.OK))
+            painter.drawEllipse(QRectF(premier[0] - 4, premier[1] - 4, 8, 8))
+        if dernier:
+            painter.setBrush(QColor(theme.DANGER))
+            painter.drawEllipse(QRectF(dernier[0] - 4, dernier[1] - 4, 8, 8))
+
+        if self._marker is not None and self._marker < len(self._points):
+            point = self._points[self._marker]
+            if point is not None:
+                x, y = self._screen(point, transform)
+                painter.setPen(QPen(QColor(theme.TEXT), 2.0))
+                painter.setBrush(QColor(theme.BG))
+                painter.drawEllipse(QRectF(x - 5.5, y - 5.5, 11, 11))
+        painter.end()
+
+
 class TrendChart(QWidget):
     """Séries quotidiennes empilées, lisibles au point près.
 
@@ -421,6 +755,8 @@ class TrendChart(QWidget):
 
     # Émis quand on clique un jour du graphe, pour l'ouvrir en détail.
     day_clicked = Signal(str)
+    # Indice survolé, ou -1 : sert à faire suivre le tracé d'une sortie.
+    point_hovered = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -496,6 +832,7 @@ class TrendChart(QWidget):
         index = self._index_at(event.position().x())
         if index != self._hover:
             self._hover = index
+            self.point_hovered.emit(-1 if index is None else index)
             self.update()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 — API Qt
@@ -510,6 +847,7 @@ class TrendChart(QWidget):
 
     def leaveEvent(self, event) -> None:  # noqa: N802 — API Qt
         self._hover = None
+        self.point_hovered.emit(-1)
         self.update()
 
     # -- rendu -----------------------------------------------------------

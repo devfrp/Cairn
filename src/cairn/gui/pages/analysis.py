@@ -21,6 +21,7 @@ from cairn.gui.widgets import (
     BarBreakdown,
     Card,
     ColumnChart,
+    LoadCalendar,
     SectionHeader,
     format_distance,
     format_duration,
@@ -87,6 +88,16 @@ class AnalysisPage(QWidget):
         self.sports.layout().addWidget(self.sports_chart)
         layout.addWidget(self.sports)
 
+        self.calendar = self._card(
+            "Calendrier de charge",
+            "Une case par jour sur l'année écoulée. Les colonnes sont les "
+            "semaines : la lecture verticale donne la semaine, l'horizontale "
+            "la régularité.",
+        )
+        self.calendar_chart = LoadCalendar()
+        self.calendar.layout().addWidget(self.calendar_chart)
+        layout.addWidget(self.calendar)
+
         self.weekly = self._card(
             "Charge par semaine",
             "Une progression régulière vaut mieux qu'une semaine à pic.",
@@ -140,12 +151,17 @@ class AnalysisPage(QWidget):
             for chart in (self.zones_chart, self.sports_chart):
                 chart.set_rows([])
             self.weekly_chart.set_values([])
+            self.calendar_chart.set_data([], [])
             return
 
         days = self.period.currentData() or 30
         self._fill_zones(queries.zone_distribution(days))
         self._fill_sports(queries.sport_breakdown(days))
         self._fill_weekly(queries.weekly_load(days))
+        # L'année entière, quelle que soit la période choisie : c'est
+        # justement la vue d'ensemble que les autres cartes ne donnent pas.
+        annee = queries.daily_metrics(365)
+        self.calendar_chart.set_data(annee.days, annee.get("load"))
         # L'usure ne dépend pas de la période choisie : elle se compte depuis
         # la pose de la pièce, pas sur les trente derniers jours.
         self._fill_gear()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 from cairn.gui import prefs, queries, theme
 from cairn.gui.widgets import Card, SectionHeader, StatusPill, field_row
 from cairn.gui.workers import GarminLoginWorker, Worker
+from cairn.text import pluriel
 
 
 def launch_browser(url: str) -> bool:
@@ -470,6 +472,14 @@ class SettingsPage(QWidget):
         self.btn_backup.clicked.connect(self._backup)
         buttons.addWidget(self.btn_backup)
 
+        self.btn_export = QPushButton("Exporter en CSV")
+        self.btn_export.setToolTip(
+            "Deux tableaux : une ligne par sortie, une ligne par jour. "
+            "Lisibles par Excel, pandas ou Grafana."
+        )
+        self.btn_export.clicked.connect(self._export)
+        buttons.addWidget(self.btn_export)
+
         save = QPushButton("Enregistrer les réglages")
         save.setObjectName("Primary")
         save.clicked.connect(self.save_values)
@@ -598,6 +608,24 @@ class SettingsPage(QWidget):
             return f"{resultat['size_bytes'] / 1e6:.0f} Mo écrits dans {resultat['path']}"
 
         self._start(task, "Sauvegarde")
+
+    def _export(self) -> None:
+        """Écrit les deux tableaux dans un dossier choisi."""
+        from PySide6.QtWidgets import QFileDialog
+
+        dossier = QFileDialog.getExistingDirectory(self, "Exporter les données")
+        if not dossier:
+            return
+
+        def task() -> str:
+            resultat = queries.export_csv(dossier)
+            return " · ".join(
+                f"{pluriel(detail['rows'], 'ligne')} dans "
+                f"{Path(detail['path']).name}"
+                for detail in resultat.values()
+            )
+
+        self._start(task, "Export")
 
     def _login_garmin(self) -> None:
         if self._worker is not None:

@@ -949,19 +949,22 @@ def activity_streams(activity_id: int, points: int = 420) -> dict[str, Any]:
     donc à intervalle régulier plutôt que de tout tracer : le tracé est
     identique à l'œil et le rendu reste immédiat.
     """
-    total = fetch_one(
+    # Par `_safe` comme le reste du module : `fetch_one` laissait filer
+    # l'erreur d'une base absente, alors que ce fichier promet le contraire.
+    total = _safe(
         "SELECT count(*) AS n FROM activity_stream WHERE activity_id = ?",
         (activity_id,),
     )
-    if not total or not total["n"]:
-        return {"labels": [], "series": {}}
+    if not total or not total[0]["n"]:
+        return {"labels": [], "track": [], "series": {}}
+    total = total[0]
 
     pas = max(1, total["n"] // points)
     rows = _safe(
         """
-        SELECT elapsed_s, hr, altitude_m, speed_mps, cadence
+        SELECT elapsed_s, hr, altitude_m, speed_mps, cadence, lat, lon
           FROM (
-            SELECT elapsed_s, hr, altitude_m, speed_mps, cadence,
+            SELECT elapsed_s, hr, altitude_m, speed_mps, cadence, lat, lon,
                    row_number() OVER (ORDER BY elapsed_s) AS rang
               FROM activity_stream WHERE activity_id = ?
           )
@@ -971,6 +974,9 @@ def activity_streams(activity_id: int, points: int = 420) -> dict[str, Any]:
     )
     return {
         "labels": [_elapsed_label(r["elapsed_s"]) for r in rows],
+        # Le tracé partage l'échantillonnage des courbes : un même indice y
+        # désigne le même instant, ce qui suffit à les relier au survol.
+        "track": [(r["lat"], r["lon"]) for r in rows],
         "series": {
             "hr": [r["hr"] for r in rows],
             "altitude_m": [r["altitude_m"] for r in rows],
@@ -1183,6 +1189,62 @@ def worn_components(threshold_pct: float = 80.0) -> list[dict[str, Any]]:
         """,
         (threshold_pct,),
     )
+
+
+def export_csv(directory: str, days: int = 365) -> dict[str, Any]:
+    """Écrit deux tableaux : une ligne par sortie, une ligne par jour.
+
+    Deux fichiers plutôt qu'un : ce sont deux grains différents, et les mêler
+    obligerait à répéter la journée sur chaque sortie ou l'inverse.
+
+    Encodage `utf-8-sig` : sans la marque d'ordre des octets, Excel lit un
+    fichier UTF-8 comme du latin-1 et rend « dénivelé » illisible. Le séparateur
+    reste la virgule, ce qu'attendent pandas, Grafana et le reste.
+    """
+    import csv
+    from pathlib import Path
+
+    cible = Path(directory)
+    cible.mkdir(parents=True, exist_ok=True)
+
+    sorties = _safe(
+        """
+        SELECT a.local_date AS date, a.start_time_local AS depart, a.sport,
+               a.sport_family AS famille, a.name AS nom,
+               a.distance_m, a.elevation_gain_m, a.elapsed_s, a.moving_s,
+               a.avg_hr, a.max_hr, a.avg_cadence, a.avg_power_w, a.calories,
+               coalesce(a.training_load, a.trimp) AS charge,
+               a.perceived_exertion AS ressenti,
+               g.name AS materiel, a.primary_source AS source,
+               (SELECT group_concat(source) FROM activity_source
+                 WHERE activity_id = a.id) AS sources
+          FROM activity a
+          LEFT JOIN gear g ON g.id = a.gear_id
+         ORDER BY a.start_time
+        """
+    )
+
+    quotidien = daily_metrics(days)
+    colonnes = sorted(quotidien.series)
+
+    fichiers = {}
+    chemin = cible / "cairn-sorties.csv"
+    with chemin.open("w", newline="", encoding="utf-8-sig") as flux:
+        if sorties:
+            plume = csv.DictWriter(flux, fieldnames=list(sorties[0].keys()))
+            plume.writeheader()
+            plume.writerows(dict(ligne) for ligne in sorties)
+    fichiers["sorties"] = {"path": str(chemin), "rows": len(sorties)}
+
+    chemin = cible / "cairn-journalier.csv"
+    with chemin.open("w", newline="", encoding="utf-8-sig") as flux:
+        plume = csv.writer(flux)
+        plume.writerow(["date", *colonnes])
+        for rang, jour in enumerate(quotidien.days):
+            plume.writerow([jour, *(quotidien.get(c)[rang] for c in colonnes)])
+    fichiers["journalier"] = {"path": str(chemin), "rows": len(quotidien.days)}
+
+    return fichiers
 
 
 def backup_database(destination: str) -> dict[str, Any]:

@@ -19,7 +19,9 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +34,7 @@ from cairn.gui import queries, theme
 from cairn.gui.pages.activities import SPORT_LABELS
 from cairn.gui.widgets import (
     Card,
+    TrackMap,
     TrendChart,
     format_distance,
     format_duration,
@@ -59,6 +62,7 @@ class ActivityDetailDialog(QDialog):
         self.setMinimumSize(940, 640)
 
         self.chart: TrendChart | None = None
+        self.map: TrackMap | None = None
         detail = queries.activity_detail(activity_id) or {}
         self.setWindowTitle(detail.get("name") or "Sortie")
 
@@ -74,7 +78,7 @@ class ActivityDetailDialog(QDialog):
             layout.addWidget(self._zones(zones))
 
         flux = queries.activity_streams(activity_id)
-        layout.addWidget(self._courbes(flux), 1)
+        layout.addWidget(self._trace_et_courbes(flux), 1)
 
         boutons = QDialogButtonBox()
         fermer = boutons.addButton("Fermer", QDialogButtonBox.ButtonRole.RejectRole)
@@ -167,6 +171,66 @@ class ActivityDetailDialog(QDialog):
         return carte
 
     # -- courbes ---------------------------------------------------------
+
+    def _trace_et_courbes(self, flux: dict[str, Any]) -> QWidget:
+        """Le parcours à gauche, les courbes à droite, liés par le survol.
+
+        C'est le couplage qui compte : une bosse sur la courbe de fréquence
+        cardiaque ne dit rien tant qu'on ignore où elle s'est produite.
+        """
+        courbes = self._courbes(flux)
+        trace = self._trace(flux)
+        if trace is None:
+            return courbes
+
+        # Les courbes défilent : à quatre bandes elles dépassent la hauteur de
+        # la fenêtre, et la dernière restait hors d'atteinte. Le parcours, lui,
+        # est d'un seul tenant et occupe toute la hauteur disponible.
+        defilement = QScrollArea()
+        defilement.setWidgetResizable(True)
+        defilement.setFrameShape(QScrollArea.Shape.NoFrame)
+        defilement.setWidget(courbes)
+
+        holder = QWidget()
+        cote_a_cote = QHBoxLayout(holder)
+        cote_a_cote.setContentsMargins(0, 0, 0, 0)
+        cote_a_cote.setSpacing(14)
+        cote_a_cote.addWidget(trace, 2)
+        cote_a_cote.addWidget(defilement, 3)
+        return holder
+
+    def _trace(self, flux: dict[str, Any]) -> QWidget | None:
+        """Parcours dessiné, ou rien si la sortie n'a pas été géolocalisée."""
+        carte_widget = TrackMap()
+        carte_widget.set_track(flux.get("track") or [])
+        if not carte_widget.has_track():
+            return None
+        self.map = carte_widget
+
+        carte = Card()
+        titre = QLabel("Parcours")
+        titre.setObjectName("SectionTitle")
+        carte.layout().addWidget(titre)
+
+        indication = QLabel("Départ en vert, arrivée en rouge.")
+        indication.setObjectName("CardHint")
+        carte.layout().addWidget(indication)
+        carte.layout().addWidget(carte_widget, 1)
+
+        # Les deux échantillonnages sont le même : un indice désigne le même
+        # instant de part et d'autre, et il n'y a rien à convertir.
+        if self.chart is not None:
+            self.chart.point_hovered.connect(
+                lambda index: carte_widget.set_marker(None if index < 0 else index)
+            )
+            carte_widget.point_hovered.connect(self._suivre_sur_les_courbes)
+        return carte
+
+    def _suivre_sur_les_courbes(self, index: int) -> None:
+        if self.chart is None:
+            return
+        self.chart._hover = None if index < 0 else index
+        self.chart.update()
 
     def _courbes(self, flux: dict[str, Any]) -> QWidget:
         carte = Card()
