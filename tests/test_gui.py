@@ -620,6 +620,25 @@ class TestJourneeDetaillee:
                    VALUES (1, 1, '2026-07-01T16:00:00+00:00', '2026-07-01 18:00:00',
                            '2026-07-01', 'road', 'cycling', 3600, 'garmin', 'Sortie du soir')"""
             )
+            # Le fichier de la séance relève à la seconde là où la montre, au
+            # fil de la journée, ne donne qu'un point toutes les trois minutes.
+            depart = minuit + dt.timedelta(hours=18)
+            for seconde in range(0, 3600, 10):
+                conn.execute(
+                    """INSERT INTO activity_stream (activity_id, time, elapsed_s, hr,
+                                                    speed_mps, altitude_m, cadence)
+                       VALUES (1, ?, ?, 150, 5.0, 220.0, 85)""",
+                    (_en_utc(depart + dt.timedelta(seconds=seconde)), seconde),
+                )
+            for stade, heure, duree in (("deep", 0, 60), ("light", 1, 60),
+                                        ("rem", 2, 60), ("awake", 3, 30)):
+                conn.execute(
+                    """INSERT INTO sleep_stage (athlete_id, sleep_date, start_time,
+                                                end_time, stage)
+                       VALUES (1, '2026-07-01', ?, ?, ?)""",
+                    (_en_utc(minuit + dt.timedelta(hours=heure)),
+                     _en_utc(minuit + dt.timedelta(hours=heure, minutes=duree)), stade),
+                )
         yield
         db.close_pool()
         reset_settings()
@@ -710,16 +729,69 @@ class TestJourneeDetaillee:
         assert debut < fin
 
     def test_meme_journee_quel_que_soit_le_filtre(self, base):
-        """La fenêtre UTC doit rendre exactement ce que rendait la date locale."""
+        """La fenêtre UTC doit sélectionner exactement les mêmes relevés."""
         from cairn.db import fetch_all
-        from cairn.gui import queries
+        from cairn.gui.queries import _utc_window
 
-        attendu = fetch_all(
+        par_date = fetch_all(
             "SELECT count(*) AS n FROM wellness_reading "
             "WHERE date(time, 'localtime') = '2026-07-01'"
         )[0]["n"]
+        par_fenetre = fetch_all(
+            "SELECT count(*) AS n FROM wellness_reading WHERE time >= ? AND time < ?",
+            _utc_window("2026-07-01"),
+        )[0]["n"]
 
-        assert queries.intraday("2026-07-01").readings == attendu
+        assert par_fenetre == par_date > 0
+
+    def test_flux_de_seance_prime_sur_les_relevés_du_jour(self, base):
+        """Un point par seconde vaut mieux qu'un relevé toutes les trois minutes.
+
+        Pendant une séance, la montre continue son échantillonnage lâche ;
+        le fichier de la sortie, lui, donne la vraie moyenne de chaque case.
+        """
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+        case = 18 * 60 // queries.INTRADAY_BUCKET_MIN + 1   # 18 h 05, en pleine séance
+
+        assert jour.get("hr")[case] == pytest.approx(150.0)
+
+    def test_mesures_de_seance_absentes_hors_seance(self, base):
+        """Une bande de vitesse ne doit pas s'inventer un tracé la nuit."""
+        from cairn.gui import queries
+
+        jour = queries.intraday("2026-07-01")
+        pas = queries.INTRADAY_BUCKET_MIN
+
+        assert jour.get("speed_kmh")[18 * 60 // pas + 1] == pytest.approx(18.0)
+        assert jour.get("speed_kmh")[3 * 60 // pas] is None
+        assert jour.get("cadence")[18 * 60 // pas + 1] == pytest.approx(85.0)
+        assert jour.get("altitude_m")[18 * 60 // pas + 1] == pytest.approx(220.0)
+
+    def test_stades_de_sommeil_etages(self, base):
+        """Profond en bas, éveillé en haut : la courbe se lit en hypnogramme."""
+        from cairn.gui import queries
+
+        stades = queries.intraday("2026-07-01").get("sleep_stage")
+        pas = queries.INTRADAY_BUCKET_MIN
+
+        assert stades[30 // pas] == queries.SLEEP_DEPTH["deep"]
+        assert stades[90 // pas] == queries.SLEEP_DEPTH["light"]
+        assert stades[150 // pas] == queries.SLEEP_DEPTH["rem"]
+        assert stades[195 // pas] == queries.SLEEP_DEPTH["awake"]
+        assert stades[12 * 60 // pas] is None
+
+    def test_stade_ne_deborde_pas_sur_la_case_suivante(self, base):
+        """Découper sur les bornes prolongeait chaque phase de cinq minutes."""
+        from cairn.gui import queries
+
+        stades = queries.intraday("2026-07-01").get("sleep_stage")
+        pas = queries.INTRADAY_BUCKET_MIN
+
+        # Le sommeil s'arrête à 3 h 30 : la case suivante doit être vide.
+        assert stades[(3 * 60 + 25) // pas] == queries.SLEEP_DEPTH["awake"]
+        assert stades[(3 * 60 + 30) // pas] is None
 
     def test_base_sans_releve_ne_leve_pas(self, base):
         from cairn.db import execute
@@ -794,6 +866,21 @@ class TestMesuresQuotidiennes:
         assert mesures.get("intensity_min")[veille] is None
         # La charge, elle, vaut bien zéro : un jour sans sortie est un repos.
         assert mesures.get("load")[veille] == 0
+
+    def test_toutes_les_cles_du_catalogue_existent(self, base):
+        """Un champ au catalogue sans colonne derrière serait muet, sans erreur.
+
+        Les séries sont lues par nom : une faute de frappe ne se verrait qu'à
+        l'usage, sous la forme d'une bande qui n'apparaît jamais.
+        """
+        from cairn.gui import queries
+        from cairn.gui.pages.dashboard import CHAMPS_JOUR, CHAMPS_JOURNEE
+
+        quotidiennes = set(queries.daily_metrics(2).series)
+        journalieres = set(queries.intraday("2026-01-01").series)
+
+        assert {c.key for c in CHAMPS_JOUR} <= quotidiennes
+        assert {c.key for c in CHAMPS_JOURNEE} <= journalieres
 
     def test_cle_inconnue_rend_une_liste_vide(self, base):
         from cairn.gui import queries
@@ -872,3 +959,67 @@ class TestChoixDesChamps:
         vue._set_trend_days(30)
 
         assert vue.day_bar.isHidden()
+
+    def test_ancien_defaut_cede_la_place_au_nouveau(self, qt_app, monkeypatch):
+        """Une sélection jamais modifiée ne doit pas masquer les mesures ajoutées.
+
+        Sans cette règle, un champ nouveau reste invisible pour qui avait déjà
+        lancé l'application une fois : ses préférences enregistrées font écran.
+        """
+        from cairn.gui import prefs
+        from cairn.gui.pages.dashboard import (
+            CHAMPS_JOURNEE,
+            DEFAUT_JOURNEE,
+            DashboardPage,
+        )
+
+        monkeypatch.setattr(
+            prefs, "load_view", lambda k, d="": "hr,stress,body_battery"
+        )
+
+        retenus = DashboardPage._champs_retenus(
+            "champs_journee", CHAMPS_JOURNEE, DEFAUT_JOURNEE
+        )
+
+        assert retenus == list(DEFAUT_JOURNEE)
+
+    def test_choix_deliberé_respecté(self, qt_app, monkeypatch):
+        """En revanche, une sélection décidée ne se fait pas écraser."""
+        from cairn.gui import prefs
+        from cairn.gui.pages.dashboard import (
+            CHAMPS_JOURNEE,
+            DEFAUT_JOURNEE,
+            DashboardPage,
+        )
+
+        monkeypatch.setattr(prefs, "load_view", lambda k, d="": "hr,cadence")
+
+        retenus = DashboardPage._champs_retenus(
+            "champs_journee", CHAMPS_JOURNEE, DEFAUT_JOURNEE
+        )
+
+        assert retenus == ["hr", "cadence"]
+
+    def test_catalogue_long_se_replie_en_sous_menus(self, page):
+        """Quarante-six mesures d'affilée dépassent de l'écran."""
+        from cairn.gui.pages.dashboard import CHAMPS_JOUR, SEUIL_SOUS_MENUS
+
+        vue, _ = page
+
+        assert len(CHAMPS_JOUR) > SEUIL_SOUS_MENUS
+        assert set(vue._sous_menus) == {c.groupe for c in CHAMPS_JOUR}
+
+    def test_compteur_de_sous_menu_suit_les_coches(self, page):
+        vue, _ = page
+        avant = vue._sous_menus["Journée"].title()
+        vue._toggle_field("steps", True)
+
+        assert vue._sous_menus["Journée"].title() != avant
+        assert "(1)" in vue._sous_menus["Journée"].title()
+
+    def test_catalogue_court_reste_plat(self, page):
+        """Sept mesures se lisent mieux d'un coup que derrière trois sous-menus."""
+        vue, _ = page
+        vue._set_trend_days(1)
+
+        assert vue._sous_menus == {}

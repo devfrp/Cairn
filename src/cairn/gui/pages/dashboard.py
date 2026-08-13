@@ -75,6 +75,32 @@ def _par_minute(v: float) -> str:
     return f"{v:.0f} /min"
 
 
+def _pourcent(v: float) -> str:
+    return f"{v:.0f} %"
+
+
+def _kmh(v: float) -> str:
+    return f"{v:.1f}".replace(".", ",") + " km/h"
+
+
+def _watts(v: float) -> str:
+    return f"{v:.0f} W"
+
+
+def _ratio(v: float) -> str:
+    return f"{v:.2f}".replace(".", ",")
+
+
+def _stade(v: float) -> str:
+    """Profondeur du sommeil rendue en clair.
+
+    L'axe est numérique pour que la courbe s'étage comme un hypnogramme ; les
+    graduations, elles, doivent nommer le stade et non afficher « 1,5 ».
+    """
+    noms = ("profond", "léger", "paradoxal", "éveillé")
+    return noms[min(max(int(round(v)), 0), len(noms) - 1)]
+
+
 def _pas(v: float) -> str:
     # Espace insécable entre les milliers : « 18 434 » se lit d'un coup,
     # « 18434 » se compte.
@@ -111,43 +137,80 @@ CHAMPS_JOUR: tuple[Champ, ...] = (
     Champ("resting_hr", "FC de repos", "Récupération", theme.SERIES[2], _bpm),
     Champ("min_hr", "FC minimale", "Récupération", theme.SERIES[9], _bpm),
     Champ("max_hr", "FC maximale", "Récupération", theme.SERIES[6], _bpm),
+    Champ("hr_amplitude", "Amplitude cardiaque", "Récupération", theme.SERIES[0], _bpm),
     Champ("body_battery_high", "Body Battery (haut)", "Récupération", theme.SERIES[3], _entier),
     Champ("body_battery_low", "Body Battery (bas)", "Récupération", theme.SERIES[8], _entier),
+    Champ("body_battery_charged", "Body Battery rechargée", "Récupération",
+          theme.SERIES[1], _entier),
+    Champ("body_battery_drained", "Body Battery dépensée", "Récupération",
+          theme.SERIES[6], _entier),
     Champ("avg_stress", "Stress moyen", "Récupération", theme.SERIES[7], _entier),
     Champ("max_stress", "Stress maximal", "Récupération", theme.DANGER, _entier),
+    Champ("high_stress_s", "Temps de stress élevé", "Récupération", theme.DANGER, _duree),
+    Champ("rest_stress_s", "Temps au repos", "Récupération", theme.SERIES[1], _duree),
     Champ("avg_respiration", "Respiration", "Récupération", theme.SERIES[5], _par_minute),
     Champ("sleep_s", "Sommeil", "Sommeil", theme.SERIES[1], _duree),
     Champ("deep_s", "Sommeil profond", "Sommeil", theme.SERIES[5], _duree),
     Champ("rem_s", "Sommeil paradoxal", "Sommeil", theme.SERIES[4], _duree),
     Champ("light_s", "Sommeil léger", "Sommeil", theme.SERIES[9], _duree),
     Champ("awake_s", "Éveils", "Sommeil", theme.SERIES[6], _duree),
+    Champ("sleep_efficiency", "Efficacité du sommeil", "Sommeil", theme.OK, _pourcent),
+    Champ("deep_share", "Part de sommeil profond", "Sommeil", theme.SERIES[5], _pourcent),
     Champ("sleep_hr", "FC nocturne moyenne", "Sommeil", theme.SERIES[2], _bpm),
     Champ("sleep_low_hr", "FC nocturne minimale", "Sommeil", theme.SERIES[8], _bpm),
     Champ("sleep_respiration", "Respiration nocturne", "Sommeil", theme.SERIES[7], _par_minute),
     Champ("steps", "Pas", "Journée", theme.SERIES[1], _pas),
     Champ("walk_distance_m", "Distance parcourue", "Journée", theme.SERIES[5], _distance),
     Champ("calories_active", "Calories actives", "Journée", theme.SERIES[3], _kcal),
+    Champ("calories_bmr", "Calories au repos", "Journée", theme.SERIES[8], _kcal),
+    Champ("calories_total", "Calories totales", "Journée", theme.SERIES[0], _kcal),
     Champ("intensity_min", "Minutes d'intensité", "Journée", theme.SERIES[6], _minutes),
     Champ("load", "Charge quotidienne", "Entraînement", theme.ACCENT, _entier),
+    Champ("session_count", "Nombre de séances", "Entraînement", theme.SERIES[7], _entier),
     Champ("sport_s", "Temps d'entraînement", "Entraînement", theme.SERIES[1], _duree),
+    Champ("moving_s", "Temps en mouvement", "Entraînement", theme.SERIES[5], _duree),
     Champ("sport_distance_m", "Distance à l'entraînement", "Entraînement",
           theme.SERIES[2], _distance),
-    Champ("elevation_m", "Dénivelé", "Entraînement", theme.SERIES[8], format_elevation),
-    Champ("ctl", "Condition (CTL)", "Entraînement", theme.SERIES[5], _entier),
-    Champ("atl", "Fatigue (ATL)", "Entraînement", theme.SERIES[6], _entier),
-    Champ("tsb", "Forme (TSB)", "Entraînement", theme.SERIES[3], _signe),
+    Champ("elevation_m", "Dénivelé positif", "Entraînement", theme.SERIES[8], format_elevation),
+    Champ("descent_m", "Dénivelé négatif", "Entraînement", theme.SERIES[9], format_elevation),
+    Champ("max_speed_kmh", "Vitesse maximale", "Entraînement", theme.SERIES[6], _kmh),
+    Champ("avg_power_w", "Puissance moyenne", "Entraînement", theme.SERIES[4], _watts),
+    Champ("sport_calories", "Calories des séances", "Entraînement", theme.SERIES[3], _kcal),
+    Champ("ctl", "Condition (CTL)", "Charge", theme.SERIES[5], _entier),
+    Champ("atl", "Fatigue (ATL)", "Charge", theme.SERIES[6], _entier),
+    Champ("tsb", "Forme (TSB)", "Charge", theme.SERIES[3], _signe),
+    Champ("acwr", "Rapport aigu / chronique", "Charge", theme.SERIES[2], _ratio),
+    Champ("monotony", "Monotonie", "Charge", theme.SERIES[7], _ratio),
+    Champ("strain", "Contrainte", "Charge", theme.SERIES[0], _entier),
 )
 
 # Sur une seule journée, seules les mesures relevées en continu ont du sens :
-# une durée de sommeil ne se trace pas minute par minute.
+# une durée de sommeil ne se trace pas minute par minute. Trois sources s'y
+# rejoignent — la montre au fil des heures, les stades de la nuit, et le
+# fichier seconde par seconde des séances.
 CHAMPS_JOURNEE: tuple[Champ, ...] = (
-    Champ("hr", "Fréquence cardiaque", "Journée", theme.SERIES[2], _bpm),
-    Champ("stress", "Stress", "Journée", theme.SERIES[7], _entier),
-    Champ("body_battery", "Body Battery", "Journée", theme.SERIES[3], _entier),
+    Champ("hr", "Fréquence cardiaque", "En continu", theme.SERIES[2], _bpm),
+    Champ("stress", "Stress", "En continu", theme.SERIES[7], _entier),
+    Champ("body_battery", "Body Battery", "En continu", theme.SERIES[3], _entier),
+    Champ("sleep_stage", "Stade de sommeil", "Nuit", theme.SERIES[4], _stade),
+    Champ("speed_kmh", "Vitesse", "Séances", theme.SERIES[1], _kmh),
+    Champ("altitude_m", "Altitude", "Séances", theme.SERIES[8], format_elevation),
+    Champ("cadence", "Cadence", "Séances", theme.SERIES[6], _par_minute),
 )
 
 DEFAUT_JOUR = ("avg_hrv_ms", "resting_hr", "sleep_s", "body_battery_high", "load")
-DEFAUT_JOURNEE = tuple(c.key for c in CHAMPS_JOURNEE)
+DEFAUT_JOURNEE = ("hr", "stress", "body_battery", "sleep_stage")
+
+# Sélections qui furent un jour le réglage d'usine. Les retrouver telles
+# quelles signifie que l'utilisateur n'a jamais touché au menu : on lui donne
+# alors le nouveau défaut plutôt que de lui cacher les mesures ajoutées depuis.
+DEFAUTS_ANCIENS = {
+    "champs_journee": {("body_battery", "hr", "stress")},
+}
+
+# Au-delà de cette longueur, un menu plat déborde de l'écran : il se replie
+# alors en sous-menus, un par famille de mesures.
+SEUIL_SOUS_MENUS = 12
 
 # Libellés courts des pièces, pour tenir sur une ligne d'alerte.
 PIECES_COURTES = {
@@ -175,6 +238,7 @@ class DashboardPage(QWidget):
         self._champs_journee = self._champs_retenus(
             "champs_journee", CHAMPS_JOURNEE, DEFAUT_JOURNEE
         )
+        self._sous_menus: dict[str, QMenu] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -354,29 +418,64 @@ class DashboardPage(QWidget):
         """Sélection persistée, filtrée sur ce que le catalogue connaît encore.
 
         Une clé disparue d'une version à l'autre ne doit pas faire échouer le
-        chargement, seulement s'effacer.
+        chargement, seulement s'effacer. À l'inverse, une sélection identique
+        à un ancien réglage d'usine n'en est pas une : elle date d'avant les
+        mesures ajoutées depuis, et les cacher serait les rendre introuvables.
         """
         connus = {c.key for c in catalogue}
         stocke = [k for k in prefs.load_view(cle).split(",") if k in connus]
-        return stocke or list(defaut)
+        if not stocke or tuple(sorted(stocke)) in DEFAUTS_ANCIENS.get(cle, set()):
+            return list(defaut)
+        return stocke
 
     def _rebuild_field_menu(self) -> None:
         """Reconstruit le menu : le catalogue change avec la période."""
         self._menu_champs.clear()
+        self._sous_menus = {}
+        catalogue = self._catalogue()
         selection = set(self._selection())
-        groupe_courant = ""
-        for champ in self._catalogue():
-            if champ.groupe != groupe_courant:
-                groupe_courant = champ.groupe
-                self._menu_champs.addSection(champ.groupe)
-            action = QAction(champ.label, self._menu_champs)
-            action.setCheckable(True)
-            action.setChecked(champ.key in selection)
-            action.toggled.connect(
-                lambda coche, k=champ.key: self._toggle_field(k, coche)
+
+        if len(catalogue) <= SEUIL_SOUS_MENUS:
+            groupe_courant = ""
+            for champ in catalogue:
+                if champ.groupe != groupe_courant:
+                    groupe_courant = champ.groupe
+                    self._menu_champs.addSection(champ.groupe)
+                self._menu_champs.addAction(self._field_action(champ, selection))
+        else:
+            # Un par famille, avec le compte des mesures cochées : sans lui,
+            # il faudrait ouvrir les cinq sous-menus pour savoir ce qui est
+            # tracé.
+            for groupe in dict.fromkeys(c.groupe for c in catalogue):
+                champs = [c for c in catalogue if c.groupe == groupe]
+                sous_menu = self._menu_champs.addMenu(groupe)
+                self._sous_menus[groupe] = sous_menu
+                for champ in champs:
+                    sous_menu.addAction(self._field_action(champ, selection))
+
+        self._refresh_menu_counts()
+
+    def _refresh_menu_counts(self) -> None:
+        """Réécrit les compteurs sans reconstruire le menu.
+
+        Reconstruire supprimerait l'action en train d'émettre son signal.
+        """
+        selection = set(self._selection())
+        for groupe, sous_menu in self._sous_menus.items():
+            coches = sum(
+                1 for c in self._catalogue() if c.groupe == groupe and c.key in selection
             )
-            self._menu_champs.addAction(action)
+            sous_menu.setTitle(f"{groupe} ({coches})" if coches else groupe)
         self.btn_champs.setText(f"Champs ({len(selection)})")
+
+    def _field_action(self, champ: Champ, selection: set[str]) -> QAction:
+        action = QAction(champ.label, self._menu_champs)
+        action.setCheckable(True)
+        # Coché avant le branchement : sinon l'état initial se propage comme un
+        # clic et réécrit les préférences à chaque ouverture de la page.
+        action.setChecked(champ.key in selection)
+        action.toggled.connect(lambda coche, k=champ.key: self._toggle_field(k, coche))
+        return action
 
     def _toggle_field(self, key: str, coche: bool) -> None:
         selection = self._selection()
@@ -391,7 +490,7 @@ class DashboardPage(QWidget):
 
         cle = "champs_journee" if self._trend_days == 1 else "champs_jour"
         prefs.save_view(cle, ",".join(selection))
-        self.btn_champs.setText(f"Champs ({len(selection)})")
+        self._refresh_menu_counts()
         self._render_chart()
 
     def _shift_day(self, delta: int) -> None:

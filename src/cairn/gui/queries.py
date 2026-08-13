@@ -299,9 +299,23 @@ def daily_metrics(days: int = 30) -> DailyMetrics:
                CASE WHEN w.day IS NOT NULL
                     THEN coalesce(w.moderate_intensity_min, 0)
                        + coalesce(w.vigorous_intensity_min, 0) END AS intensity_min,
+               w.calories_bmr, w.rest_stress_s, w.high_stress_s,
+               w.body_battery_charged, w.body_battery_drained,
+               CASE WHEN w.day IS NOT NULL
+                    THEN coalesce(w.calories_bmr, 0)
+                       + coalesce(w.calories_active, 0) END AS calories_total,
+               CASE WHEN w.max_hr IS NOT NULL AND w.min_hr IS NOT NULL
+                    THEN w.max_hr - w.min_hr END AS hr_amplitude,
                s.duration_s AS sleep_s, s.deep_s, s.rem_s, s.light_s, s.awake_s,
                s.avg_hr AS sleep_hr, s.lowest_hr AS sleep_low_hr,
                s.avg_respiration AS sleep_respiration,
+               -- Part de la nuit réellement dormie : deux nuits de huit heures
+               -- ne se valent pas si l'une compte une heure d'éveil.
+               CASE WHEN s.duration_s > 0
+                    THEN 100.0 * s.duration_s
+                       / (s.duration_s + coalesce(s.awake_s, 0)) END AS sleep_efficiency,
+               CASE WHEN s.duration_s > 0
+                    THEN 100.0 * coalesce(s.deep_s, 0) / s.duration_s END AS deep_share,
                (SELECT coalesce(sum(coalesce(a.training_load, a.trimp)), 0)
                   FROM activity a WHERE a.local_date = calendar.day) AS load,
                (SELECT coalesce(sum(a.distance_m), 0)
@@ -310,9 +324,24 @@ def daily_metrics(days: int = 30) -> DailyMetrics:
                (SELECT coalesce(sum(a.elevation_gain_m), 0)
                   FROM activity a WHERE a.local_date = calendar.day)
                  AS elevation_m,
+               (SELECT coalesce(sum(a.elevation_loss_m), 0)
+                  FROM activity a WHERE a.local_date = calendar.day)
+                 AS descent_m,
                (SELECT coalesce(sum(a.elapsed_s), 0)
                   FROM activity a WHERE a.local_date = calendar.day) AS sport_s,
-               m.ctl, m.atl, m.tsb
+               (SELECT coalesce(sum(a.moving_s), 0)
+                  FROM activity a WHERE a.local_date = calendar.day) AS moving_s,
+               (SELECT sum(a.calories)
+                  FROM activity a WHERE a.local_date = calendar.day) AS sport_calories,
+               (SELECT max(a.max_speed_mps) * 3.6
+                  FROM activity a WHERE a.local_date = calendar.day) AS max_speed_kmh,
+               -- Puissance pondérée par la durée : la moyenne simple donnerait
+               -- autant de poids à dix minutes de home-trainer qu'à trois heures.
+               (SELECT sum(a.avg_power_w * a.elapsed_s) / sum(a.elapsed_s)
+                  FROM activity a
+                 WHERE a.local_date = calendar.day AND a.avg_power_w IS NOT NULL)
+                 AS avg_power_w,
+               m.ctl, m.atl, m.tsb, m.acwr, m.monotony, m.strain, m.session_count
           FROM calendar
           LEFT JOIN hrv_night       h ON h.day        = calendar.day
           LEFT JOIN daily_wellness  w ON w.day        = calendar.day
@@ -401,13 +430,21 @@ def _utc_window(day: str) -> tuple[str, str]:
     )
 
 
-def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> Intraday:
-    """Fréquence cardiaque, stress et Body Battery d'une journée entière.
+# Profondeur du sommeil, du plus profond au plus léger. Traduite en nombre
+# pour se tracer comme une courbe en escalier — la lecture classique d'un
+# hypnogramme, où l'on voit d'un coup d'œil si les cycles se sont enchaînés.
+SLEEP_DEPTH = {"deep": 0.0, "light": 1.0, "rem": 2.0, "awake": 3.0}
 
-    Les relevés arrivent à intervalle irrégulier ; ils sont moyennés dans des
-    cases de largeur fixe pour que l'axe reste proportionnel au temps. Une
-    case sans relevé reste vide plutôt que d'être comblée : la montre retirée
-    en milieu d'après-midi doit se voir.
+
+def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> Intraday:
+    """Tout ce qui est mesuré en continu sur une journée.
+
+    Trois sources se rejoignent sur le même axe : les relevés de la montre au
+    fil de la journée, les stades de sommeil de la nuit, et les flux seconde
+    par seconde des séances. Les valeurs sont moyennées dans des cases de
+    largeur fixe pour que l'axe reste proportionnel au temps ; une case sans
+    relevé reste vide plutôt que d'être comblée, la montre retirée en milieu
+    d'après-midi devant se voir.
     """
     if day is None:
         day = intraday_bounds()["last_day"]
@@ -416,6 +453,26 @@ def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> I
 
     cases = 24 * 60 // bucket_min
     debut, fin = _utc_window(day)
+    minuit = dt.datetime.fromisoformat(debut)
+
+    def case_de(instant: Any) -> int | None:
+        """Case de l'axe où tombe un horodatage UTC."""
+        moment = _as_utc(instant)
+        if moment is None:
+            return None
+        ecoule = (moment - minuit).total_seconds() / 60
+        return min(max(int(ecoule // bucket_min), 0), cases - 1)
+
+    cumuls: dict[str, list[list[float]]] = {
+        cle: [[] for _ in range(cases)]
+        for cle in ("hr", "stress", "body_battery", "sport_hr",
+                    "speed_kmh", "altitude_m", "cadence")
+    }
+
+    # Les trois colonnes de la clé primaire sont nommées dans l'ordre : sans
+    # l'athlète ni la mesure, la plage horaire seule oblige SQLite à parcourir
+    # les cent soixante-dix mille relevés, soit une seconde et demie au premier
+    # affichage, le temps que le fichier monte en cache.
     rows = _safe(
         """
         SELECT metric,
@@ -423,14 +480,12 @@ def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> I
              + CAST(strftime('%M', time, 'localtime') AS INTEGER) AS minute,
                value
           FROM wellness_reading
-         WHERE time >= ? AND time < ?
+         WHERE athlete_id IN (SELECT id FROM athlete)
+           AND metric IN ('hr', 'stress', 'body_battery')
+           AND time >= ? AND time < ?
         """,
         (debut, fin),
     )
-
-    cumuls: dict[str, list[list[float]]] = {
-        metric: [[] for _ in range(cases)] for metric in ("hr", "stress", "body_battery")
-    }
     for entry in rows:
         seau = cumuls.get(entry["metric"])
         if seau is None:
@@ -441,17 +496,95 @@ def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> I
         if entry["value"] is not None and entry["value"] >= 0:
             seau[index].append(float(entry["value"]))
 
+    # Pendant une séance, la montre n'enregistre au fil de la journée qu'un
+    # point toutes les deux ou trois minutes, alors que le fichier de la sortie
+    # en compte un par seconde. On préfère donc le second là où il existe.
+    streams = _safe(
+        """
+        SELECT s.time, s.hr, s.speed_mps, s.altitude_m, s.cadence
+          FROM activity_stream s
+         WHERE s.activity_id IN (SELECT id FROM activity
+                                  WHERE local_date IN (?, date(?, '-1 day')))
+           AND s.time >= ? AND s.time < ?
+        """,
+        (day, day, debut, fin),
+    )
+    for point in streams:
+        index = case_de(point["time"])
+        if index is None:
+            continue
+        for colonne, cle, facteur in (
+            ("hr", "sport_hr", 1.0), ("speed_mps", "speed_kmh", 3.6),
+            ("altitude_m", "altitude_m", 1.0), ("cadence", "cadence", 1.0),
+        ):
+            valeur = point[colonne]
+            if valeur is not None:
+                cumuls[cle][index].append(float(valeur) * facteur)
+
+    series = {
+        cle: [sum(v) / len(v) if v else None for v in seaux]
+        for cle, seaux in cumuls.items()
+    }
+    # La fréquence de la séance remplace celle de la journée sur ses cases :
+    # une moyenne de trois cents points vaut mieux qu'un relevé isolé.
+    series["hr"] = [
+        sport if sport is not None else jour
+        for sport, jour in zip(series.pop("sport_hr"), series["hr"], strict=True)
+    ]
+    series["sleep_stage"] = _sleep_stage_series(debut, fin, cases, bucket_min, minuit)
+
     result = Intraday(
         day=day,
         labels=[f"{i * bucket_min // 60:02d}:{i * bucket_min % 60:02d}" for i in range(cases)],
-        series={
-            metric: [sum(v) / len(v) if v else None for v in seaux]
-            for metric, seaux in cumuls.items()
-        },
-        readings=len(rows),
+        series=series,
+        readings=len(rows) + len(streams),
     )
     result.spans = _intraday_spans(day, bucket_min, cases)
     return result
+
+
+def _as_utc(value: Any) -> dt.datetime | None:
+    """Horodatage exploitable, qu'il vienne converti ou en texte brut."""
+    if value is None:
+        return None
+    if not isinstance(value, dt.datetime):
+        try:
+            value = dt.datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
+def _sleep_stage_series(
+    debut: str, fin: str, cases: int, bucket_min: int, minuit: dt.datetime
+) -> list[float | None]:
+    """Profondeur du sommeil case par case.
+
+    Les stades sont stockés en intervalles, pas en points. Une case prend le
+    stade qui couvre son milieu : découper sur les bornes ferait déborder
+    chaque phase d'une case sur la suivante, et la dernière de la nuit
+    prolongerait le sommeil de cinq minutes après le réveil.
+    """
+    profondeurs: list[float | None] = [None] * cases
+    for stade in _safe(
+        """
+        SELECT start_time, end_time, stage FROM sleep_stage
+         WHERE end_time > ? AND start_time < ? ORDER BY start_time
+        """,
+        (debut, fin),
+    ):
+        # « unmeasurable » n'est pas un stade mais une absence de mesure.
+        valeur = SLEEP_DEPTH.get(stade["stage"])
+        depart, arrivee = _as_utc(stade["start_time"]), _as_utc(stade["end_time"])
+        if valeur is None or depart is None or arrivee is None:
+            continue
+        premiere = max(int((depart - minuit).total_seconds() // 60 // bucket_min), 0)
+        derniere = min(int((arrivee - minuit).total_seconds() // 60 // bucket_min), cases - 1)
+        for index in range(premiere, derniere + 1):
+            milieu = minuit + dt.timedelta(minutes=(index + 0.5) * bucket_min)
+            if depart <= milieu < arrivee:
+                profondeurs[index] = valeur
+    return profondeurs
 
 
 def _intraday_spans(day: str, bucket_min: int, cases: int) -> list[dict[str, Any]]:
