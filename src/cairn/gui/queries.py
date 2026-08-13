@@ -210,7 +210,7 @@ def load(days: int = 30) -> Load:
         SELECT calendar.day AS day,
                coalesce(sum(coalesce(a.training_load, a.trimp)), 0) AS load
           FROM calendar
-          LEFT JOIN activity a ON a.local_date = calendar.day
+          LEFT JOIN activity_kept a ON a.local_date = calendar.day
          GROUP BY calendar.day ORDER BY calendar.day
         """,
         (-days,),
@@ -222,14 +222,14 @@ def load(days: int = 30) -> Load:
                coalesce(sum(distance_m), 0) AS distance_m,
                coalesce(sum(elevation_gain_m), 0) AS elevation_m,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity
+          FROM activity_kept
          WHERE local_date > date('now', 'localtime', '-7 days')
         """
     )
     previous = _safe(
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity
+          FROM activity_kept
          WHERE local_date > date('now', 'localtime', '-14 days')
            AND local_date <= date('now', 'localtime', '-7 days')
         """
@@ -237,7 +237,7 @@ def load(days: int = 30) -> Load:
     month = _safe(
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity WHERE local_date > date('now', 'localtime', '-28 days')
+          FROM activity_kept WHERE local_date > date('now', 'localtime', '-28 days')
         """
     )
 
@@ -337,31 +337,31 @@ def daily_metrics(days: int = 30) -> DailyMetrics:
                CASE WHEN s.duration_s > 0
                     THEN 100.0 * coalesce(s.deep_s, 0) / s.duration_s END AS deep_share,
                (SELECT coalesce(sum(coalesce(a.training_load, a.trimp)), 0)
-                  FROM activity a WHERE a.local_date = calendar.day) AS load,
+                  FROM activity_kept a WHERE a.local_date = calendar.day) AS load,
                (SELECT coalesce(sum(a.distance_m), 0)
-                  FROM activity a WHERE a.local_date = calendar.day)
+                  FROM activity_kept a WHERE a.local_date = calendar.day)
                  AS sport_distance_m,
                (SELECT coalesce(sum(a.elevation_gain_m), 0)
-                  FROM activity a WHERE a.local_date = calendar.day)
+                  FROM activity_kept a WHERE a.local_date = calendar.day)
                  AS elevation_m,
                (SELECT coalesce(sum(a.elevation_loss_m), 0)
-                  FROM activity a WHERE a.local_date = calendar.day)
+                  FROM activity_kept a WHERE a.local_date = calendar.day)
                  AS descent_m,
                (SELECT coalesce(sum(a.elapsed_s), 0)
-                  FROM activity a WHERE a.local_date = calendar.day) AS sport_s,
+                  FROM activity_kept a WHERE a.local_date = calendar.day) AS sport_s,
                (SELECT coalesce(sum(a.moving_s), 0)
-                  FROM activity a WHERE a.local_date = calendar.day) AS moving_s,
+                  FROM activity_kept a WHERE a.local_date = calendar.day) AS moving_s,
                (SELECT sum(a.calories)
-                  FROM activity a WHERE a.local_date = calendar.day) AS sport_calories,
+                  FROM activity_kept a WHERE a.local_date = calendar.day) AS sport_calories,
                (SELECT max(a.max_speed_mps) * 3.6
-                  FROM activity a
+                  FROM activity_kept a
                  WHERE a.local_date = calendar.day
                    AND a.max_speed_mps * 3.6 <= """ + PLAFOND_VITESSE_SQL + """
                ) AS max_speed_kmh,
                -- Puissance pondérée par la durée : la moyenne simple donnerait
                -- autant de poids à dix minutes de home-trainer qu'à trois heures.
                (SELECT sum(a.avg_power_w * a.elapsed_s) / sum(a.elapsed_s)
-                  FROM activity a
+                  FROM activity_kept a
                  WHERE a.local_date = calendar.day AND a.avg_power_w IS NOT NULL)
                  AS avg_power_w,
                m.ctl, m.atl, m.tsb, m.acwr, m.monotony, m.strain, m.session_count
@@ -560,7 +560,7 @@ def intraday(day: str | None = None, bucket_min: int = INTRADAY_BUCKET_MIN) -> I
         """
         SELECT s.time, s.hr, s.speed_mps, s.altitude_m, s.cadence
           FROM activity_stream s
-         WHERE s.activity_id IN (SELECT id FROM activity
+         WHERE s.activity_id IN (SELECT id FROM activity_kept
                                   WHERE local_date IN (?, date(?, '-1 day')))
            AND s.time >= ? AND s.time < ?
         """,
@@ -647,6 +647,9 @@ def _sleep_stage_series(
 def _intraday_spans(day: str, bucket_min: int, cases: int) -> list[dict[str, Any]]:
     """Nuits et séances de la journée, exprimées en cases de l'axe.
 
+    Sur la table et non sur la vue : une sortie écartée des statistiques a
+    tout de même eu lieu, et la journée doit la montrer.
+
     Les libellés restent bruts : leur mise en forme appartient à la page, qui
     seule sait combien de place elle a.
     """
@@ -730,7 +733,8 @@ def recent_activities(limit: int = 60) -> list[dict[str, Any]]:
         SELECT a.id, a.start_time_local, a.sport, a.name, a.distance_m, a.elevation_gain_m,
                a.elapsed_s, a.avg_hr, a.max_hr,
                coalesce(a.training_load, a.trimp) AS load,
-               a.has_streams, a.is_race, g.name AS gear_name,
+               a.has_streams, a.is_race, a.excluded, a.excluded_reason,
+               g.name AS gear_name,
                group_concat(DISTINCT s.source) AS sources
           FROM activity a
           LEFT JOIN gear g ON g.id = a.gear_id
@@ -816,7 +820,7 @@ def zone_distribution(days: int = 30) -> list[dict[str, Any]]:
         """
         SELECT z.zone_index, sum(z.seconds) AS seconds
           FROM activity_zone_time z
-          JOIN activity a ON a.id = z.activity_id
+          JOIN activity_kept a ON a.id = z.activity_id
          WHERE z.metric = 'hr'
            AND a.local_date > date('now', 'localtime', ? || ' days')
          GROUP BY z.zone_index ORDER BY z.zone_index
@@ -834,7 +838,7 @@ def sport_breakdown(days: int = 30) -> list[dict[str, Any]]:
                coalesce(sum(elapsed_s), 0) AS duration_s,
                coalesce(sum(distance_m), 0) AS distance_m,
                coalesce(sum(elevation_gain_m), 0) AS elevation_m
-          FROM activity
+          FROM activity_kept
          WHERE local_date > date('now', 'localtime', ? || ' days')
          GROUP BY sport ORDER BY duration_s DESC
         """,
@@ -853,7 +857,7 @@ def weekly_load(days: int = 90) -> list[dict[str, Any]]:
         SELECT strftime('%Y-%W', local_date) AS week,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load,
                count(*) AS sessions
-          FROM activity
+          FROM activity_kept
          WHERE local_date > date('now', 'localtime', ? || ' days')
          GROUP BY week ORDER BY week
         """,
@@ -1014,6 +1018,26 @@ def activity_laps(activity_id: int) -> list[dict[str, Any]]:
     )
 
 
+def set_activity_excluded(activity_id: int, excluded: bool, reason: str = "") -> None:
+    """Écarte une sortie des statistiques, ou l'y remet.
+
+    Ni suppression ni correction : la sortie a eu lieu, seul son
+    enregistrement est faux. La supprimer perdrait la donnée brute et la
+    resynchronisation la ramènerait ; corriger une valeur inventerait un
+    chiffre. Le drapeau laisse la ligne visible, avec sa raison, et la sort
+    des agrégats — qui lisent tous la vue `activity_kept`.
+    """
+    from cairn.db import execute
+
+    try:
+        execute(
+            "UPDATE activity SET excluded = ?, excluded_reason = ? WHERE id = ?",
+            (1 if excluded else 0, reason.strip() or None, activity_id),
+        )
+    except (sqlite3.Error, OSError):
+        return
+
+
 def acknowledge_flag(kind: str) -> int:
     """Éteint tous les signaux d'une même nature.
 
@@ -1059,19 +1083,19 @@ def period_totals(days: int | None = None) -> dict[str, Any]:
     rows = _safe(
         f"""
         SELECT
-          (SELECT count(*) FROM activity WHERE local_date >= {debut}) AS sessions,
-          (SELECT coalesce(sum(distance_m), 0) FROM activity
+          (SELECT count(*) FROM activity_kept WHERE local_date >= {debut}) AS sessions,
+          (SELECT coalesce(sum(distance_m), 0) FROM activity_kept
             WHERE local_date >= {debut}) AS distance_m,
-          (SELECT coalesce(sum(elevation_gain_m), 0) FROM activity
+          (SELECT coalesce(sum(elevation_gain_m), 0) FROM activity_kept
             WHERE local_date >= {debut}) AS elevation_m,
-          (SELECT coalesce(sum(elapsed_s), 0) FROM activity
+          (SELECT coalesce(sum(elapsed_s), 0) FROM activity_kept
             WHERE local_date >= {debut}) AS duration_s,
-          (SELECT coalesce(sum(coalesce(training_load, trimp)), 0) FROM activity
+          (SELECT coalesce(sum(coalesce(training_load, trimp)), 0) FROM activity_kept
             WHERE local_date >= {debut}) AS load,
-          (SELECT coalesce(sum(distance_m), 0) FROM activity
+          (SELECT coalesce(sum(distance_m), 0) FROM activity_kept
             WHERE local_date >= {debut_precedent}
               AND local_date < {fin_precedente}) AS distance_precedente_m,
-          (SELECT coalesce(sum(elapsed_s), 0) FROM activity
+          (SELECT coalesce(sum(elapsed_s), 0) FROM activity_kept
             WHERE local_date >= {debut_precedent}
               AND local_date < {fin_precedente}) AS duration_precedente_s
         """  # noqa: S608 — bornes construites depuis un entier, jamais une saisie
@@ -1202,7 +1226,7 @@ def segment_history(segment_id: int) -> list[dict[str, Any]]:
         SELECT e.start_time, e.elapsed_s, e.avg_hr, e.pr_rank,
                a.id AS activity_id, a.name AS activity_name
           FROM segment_effort e
-          LEFT JOIN activity a ON a.id = e.activity_id
+          LEFT JOIN activity_kept a ON a.id = e.activity_id
          WHERE e.segment_id = ?
          ORDER BY e.start_time
         """,
@@ -1222,24 +1246,24 @@ def personal_records(minimum_sessions: int = 3) -> list[dict[str, Any]]:
     return _safe(
         """
         WITH pratiques AS (
-            SELECT sport, count(*) AS sessions FROM activity
+            SELECT sport, count(*) AS sessions FROM activity_kept
              GROUP BY sport HAVING sessions >= ?
         )
         SELECT p.sport, p.sessions,
-               (SELECT id FROM activity WHERE sport = p.sport
+               (SELECT id FROM activity_kept WHERE sport = p.sport
                  ORDER BY distance_m DESC LIMIT 1) AS longest_id,
-               (SELECT max(distance_m) FROM activity WHERE sport = p.sport) AS longest_m,
-               (SELECT id FROM activity WHERE sport = p.sport
+               (SELECT max(distance_m) FROM activity_kept WHERE sport = p.sport) AS longest_m,
+               (SELECT id FROM activity_kept WHERE sport = p.sport
                  ORDER BY elevation_gain_m DESC LIMIT 1) AS highest_id,
-               (SELECT max(elevation_gain_m) FROM activity WHERE sport = p.sport)
+               (SELECT max(elevation_gain_m) FROM activity_kept WHERE sport = p.sport)
                  AS highest_m,
-               (SELECT id FROM activity WHERE sport = p.sport
+               (SELECT id FROM activity_kept WHERE sport = p.sport
                  ORDER BY elapsed_s DESC LIMIT 1) AS longest_time_id,
-               (SELECT max(elapsed_s) FROM activity WHERE sport = p.sport)
+               (SELECT max(elapsed_s) FROM activity_kept WHERE sport = p.sport)
                  AS longest_time_s,
-               (SELECT id FROM activity WHERE sport = p.sport
+               (SELECT id FROM activity_kept WHERE sport = p.sport
                  ORDER BY coalesce(trimp, training_load) DESC LIMIT 1) AS hardest_id,
-               (SELECT max(coalesce(trimp, training_load)) FROM activity
+               (SELECT max(coalesce(trimp, training_load)) FROM activity_kept
                  WHERE sport = p.sport) AS hardest_load
           FROM pratiques p
          ORDER BY p.sessions DESC
@@ -1318,7 +1342,7 @@ def export_csv(directory: str, days: int = 365) -> dict[str, Any]:
                g.name AS materiel, a.primary_source AS source,
                (SELECT group_concat(source) FROM activity_source
                  WHERE activity_id = a.id) AS sources
-          FROM activity a
+          FROM activity_kept a
           LEFT JOIN gear g ON g.id = a.gear_id
          ORDER BY a.start_time
         """

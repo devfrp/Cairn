@@ -12,8 +12,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -146,11 +148,20 @@ class ActivityModel(QAbstractTableModel):
 
         sources = sorted({s for s in (entry.get("sources") or []) if s})
 
-        if role == Qt.ItemDataRole.ForegroundRole and column == 9:
-            # Une sortie vue des deux côtés a été fusionnée : on le montre.
-            return QColor(theme.OK if len(sources) > 1 else theme.MUTED)
+        if role == Qt.ItemDataRole.ForegroundRole:
+            # Une sortie écartée reste lisible mais cesse de compter : elle
+            # doit se distinguer au premier regard, sinon on cherchera en vain
+            # pourquoi les totaux ne tombent pas juste.
+            if entry.get("excluded"):
+                return QColor(theme.MUTED)
+            if column == 9:
+                # Une sortie vue des deux côtés a été fusionnée : on le montre.
+                return QColor(theme.OK if len(sources) > 1 else theme.MUTED)
 
         if role == Qt.ItemDataRole.ToolTipRole:
+            if entry.get("excluded"):
+                raison = entry.get("excluded_reason") or "sans raison indiquée"
+                return f"Écartée des statistiques — {raison}"
             if column == 9:
                 return " + ".join(sources) if sources else "aucune source"
             if column == 2:
@@ -167,7 +178,8 @@ class ActivityModel(QAbstractTableModel):
         if column == 1:
             return SPORT_LABELS.get(entry.get("sport"), entry.get("sport") or "—")
         if column == 2:
-            return entry.get("name") or "—"
+            nom = entry.get("name") or "—"
+            return f"{nom} (écartée)" if entry.get("excluded") else nom
         if column == 3:
             return format_distance(entry.get("distance_m"))
         if column == 4:
@@ -255,6 +267,8 @@ class ActivitiesPage(QWidget):
         # Le détail seconde par seconde est ce qu'on cherche en cliquant une
         # ligne : les totaux du tableau ne disent rien du déroulé.
         self.table.doubleClicked.connect(self._open_detail)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._menu_contextuel)
         # Trier sur cent dix-neuf sorties évite de faire défiler pour trouver
         # la plus longue ou la plus chargée.
         self.table.setSortingEnabled(True)
@@ -274,6 +288,42 @@ class ActivitiesPage(QWidget):
         from cairn.gui.pages.activity_detail import ActivityDetailDialog
 
         ActivityDetailDialog(ligne["id"], self).exec()
+
+    def _menu_contextuel(self, position) -> None:
+        """Écarter une sortie aberrante, ou l'y remettre."""
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+        ligne = self.model._rows[index.row()]
+
+        menu = QMenu(self)
+        if ligne.get("excluded"):
+            action = menu.addAction("Réintégrer aux statistiques")
+        else:
+            action = menu.addAction("Écarter des statistiques…")
+        detail = menu.addAction("Voir le déroulé")
+
+        choix = menu.exec(self.table.viewport().mapToGlobal(position))
+        if choix is detail:
+            self._open_detail(index)
+        elif choix is action:
+            self._basculer_exclusion(ligne)
+
+    def _basculer_exclusion(self, ligne: dict[str, Any]) -> None:
+        if ligne.get("excluded"):
+            queries.set_activity_excluded(ligne["id"], False)
+        else:
+            raison, valide = QInputDialog.getText(
+                self, "Écarter des statistiques",
+                "Cette sortie restera dans la liste, avec sa raison, mais "
+                "sortira des cumuls, des records et de la charge.\n\n"
+                "Raison :",
+                text="enregistrement aberrant",
+            )
+            if not valide:
+                return
+            queries.set_activity_excluded(ligne["id"], True, raison)
+        self.refresh(queries.probe())
 
     def refresh(self, health: queries.Health) -> None:
         if not health.usable:

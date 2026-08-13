@@ -117,7 +117,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
                coalesce(sum(distance_m), 0) AS distance_m,
                coalesce(sum(elevation_gain_m), 0) AS elevation_m,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity WHERE local_date BETWEEN ? AND ?
+          FROM activity_kept WHERE local_date BETWEEN ? AND ?
         """,
         (start, end),
     )
@@ -140,7 +140,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
             SELECT sport, count(*) AS sessions,
                    coalesce(sum(elapsed_s), 0) AS duration_s,
                    coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-              FROM activity WHERE local_date BETWEEN ? AND ?
+              FROM activity_kept WHERE local_date BETWEEN ? AND ?
              GROUP BY sport ORDER BY load DESC
             """,
             (start, end),
@@ -151,7 +151,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
         """
         SELECT name, sport, local_date, elapsed_s, distance_m, elevation_gain_m,
                coalesce(training_load, trimp) AS load
-          FROM activity
+          FROM activity_kept
          WHERE local_date BETWEEN ? AND ?
            AND coalesce(training_load, trimp) IS NOT NULL
          ORDER BY coalesce(training_load, trimp) DESC LIMIT 1
@@ -172,7 +172,7 @@ def collect(start: dt.date, end: dt.date) -> WeeklyFacts:
         """
         SELECT coalesce(sum(coalesce(training_load, trimp)), 0) AS load,
                coalesce(sum(elapsed_s), 0) AS duration_s
-          FROM activity WHERE local_date BETWEEN ? AND ?
+          FROM activity_kept WHERE local_date BETWEEN ? AND ?
         """,
         (start - dt.timedelta(days=7), start - dt.timedelta(days=1)),
     )

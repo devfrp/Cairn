@@ -1608,3 +1608,111 @@ class TestExportCsv:
 
         for champ in CHAMPS_JOUR:
             assert champ.key in entete
+
+
+class TestSortieEcartee:
+    """Un enregistrement peut être faux sans que la sortie soit à jeter.
+
+    La course relevée à 93,4 km/h vient d'un décrochage GPS d'une seconde :
+    la supprimer perdrait la donnée brute, et la resynchronisation la
+    ramènerait de toute façon.
+    """
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            # L'heure locale doit tomber le même jour que `local_date` : la
+            # vue détaillée situe les séances d'après elle.
+            aujourdhui = dt.date.today().isoformat()
+            for identifiant, distance in ((1, 20000.0), (2, 5000.0)):
+                conn.execute(
+                    """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                             local_date, sport, sport_family, elapsed_s,
+                                             distance_m, training_load, primary_source, name)
+                       VALUES (?, 1, ?, ?, ?, 'run', 'running',
+                               3600, ?, 100, 'garmin', ?)""",
+                    (identifiant, f"{aujourdhui}T0{identifiant}:00:00+00:00",
+                     f"{aujourdhui} 0{identifiant}:00:00", aujourdhui,
+                     distance, f"Sortie {identifiant}"),
+                )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_la_vue_egale_la_table_sans_exclusion(self, base):
+        from cairn.db import fetch_all
+
+        assert (
+            fetch_all("SELECT count(*) n FROM activity_kept")[0]["n"]
+            == fetch_all("SELECT count(*) n FROM activity")[0]["n"]
+        )
+
+    def test_ecartee_des_cumuls(self, base):
+        from cairn.gui import queries
+
+        avant = queries.period_totals()
+        queries.set_activity_excluded(2, True, "décrochage GPS")
+        apres = queries.period_totals()
+
+        assert apres["sessions"] == avant["sessions"] - 1
+        assert apres["distance_m"] == avant["distance_m"] - 5000
+
+    def test_toujours_visible_dans_la_liste(self, base):
+        """Invisible, on ne pourrait plus revenir sur la décision."""
+        from cairn.gui import queries
+
+        queries.set_activity_excluded(2, True, "décrochage GPS")
+        listee = {a["id"]: a for a in queries.recent_activities()}
+
+        assert 2 in listee
+        assert listee[2]["excluded"] == 1
+        assert listee[2]["excluded_reason"] == "décrochage GPS"
+
+    def test_reintegration(self, base):
+        from cairn.gui import queries
+
+        reference = queries.period_totals()["distance_m"]
+        queries.set_activity_excluded(2, True, "erreur")
+        queries.set_activity_excluded(2, False)
+
+        assert queries.period_totals()["distance_m"] == reference
+
+    def test_hors_des_records(self, base):
+        from cairn.gui import queries
+
+        queries.set_activity_excluded(1, True, "décrochage GPS")
+        records = {r["sport"]: r for r in queries.personal_records(minimum_sessions=1)}
+
+        assert records["run"]["longest_m"] == 5000
+
+    def test_hors_de_la_charge_quotidienne(self, base):
+        from cairn.gui import queries
+
+        avant = max(queries.daily_metrics(7).get("load"))
+        queries.set_activity_excluded(1, True, "décrochage GPS")
+        apres = max(queries.daily_metrics(7).get("load"))
+
+        assert apres == avant - 100
+
+    def test_la_journee_la_montre_quand_meme(self, base):
+        """Écartée des statistiques, la sortie a tout de même eu lieu."""
+        from cairn.gui import queries
+
+        queries.set_activity_excluded(1, True, "décrochage GPS")
+        jour = queries.intraday(dt.date.today().isoformat())
+
+        assert any(s["kind"] == "activity" for s in jour.spans)
+
+    def test_identifiant_inconnu_ne_leve_pas(self, base):
+        from cairn.gui import queries
+
+        queries.set_activity_excluded(999, True, "peu importe")

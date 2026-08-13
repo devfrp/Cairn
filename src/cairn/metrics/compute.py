@@ -33,7 +33,7 @@ def _daily_loads(athlete_id: int, start: dt.date, end: dt.date) -> dict[dt.date,
                coalesce(sum(distance_m), 0) AS distance_m,
                coalesce(sum(elevation_gain_m), 0) AS elevation_gain_m,
                coalesce(sum(coalesce(training_load, trimp)), 0) AS load
-          FROM activity
+          FROM activity_kept
          WHERE athlete_id = ? AND local_date BETWEEN ? AND ?
          GROUP BY local_date
         """,
@@ -92,7 +92,7 @@ def _first_day(athlete_id: int) -> dt.date | None:
     row = fetch_one(
         """
         SELECT min(day) AS day FROM (
-            SELECT min(local_date) AS day FROM activity WHERE athlete_id = ?
+            SELECT min(local_date) AS day FROM activity_kept WHERE athlete_id = ?
             UNION ALL
             SELECT min(day) FROM hrv_night WHERE athlete_id = ?
             UNION ALL
