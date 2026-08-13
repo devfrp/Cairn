@@ -787,6 +787,23 @@ def recent_runs(limit: int = 12) -> list[dict[str, Any]]:
     )
 
 
+def hours_since_last_sync() -> float | None:
+    """Heures écoulées depuis la dernière passe réussie, toutes sources.
+
+    None si aucune n'a jamais abouti — auquel cas il n'y a rien à ménager et
+    la synchronisation peut partir.
+    """
+    rows = _safe(
+        """
+        SELECT (julianday('now') - julianday(max(last_success_at))) * 24 AS heures
+          FROM sync_cursor WHERE last_success_at IS NOT NULL
+        """
+    )
+    if not rows or rows[0]["heures"] is None:
+        return None
+    return float(rows[0]["heures"])
+
+
 def credentials_present() -> dict[str, bool]:
     rows = _safe("SELECT source FROM credential")
     found = {r["source"] for r in rows}

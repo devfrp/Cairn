@@ -7,6 +7,7 @@ import os
 from PySide6.QtCore import QProcess, QProcessEnvironment, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -152,6 +153,7 @@ class SettingsPage(QWidget):
         )
 
         layout.addWidget(self._build_database())
+        layout.addWidget(self._build_behaviour())
         layout.addWidget(self._build_garmin())
         layout.addWidget(self._build_strava())
         layout.addWidget(self._build_summary())
@@ -159,6 +161,38 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
 
         self.load_values()
+
+    # -- comportement ----------------------------------------------------
+
+    def _build_behaviour(self) -> Card:
+        from cairn.gui.pages.sync import AUTO_SYNC_MIN_HOURS
+
+        card = Card()
+        title = QLabel("Au démarrage")
+        title.setObjectName("SectionTitle")
+        card.layout().addWidget(title)
+
+        self.auto_sync = QCheckBox("Synchroniser à l'ouverture de l'application")
+        self.auto_sync.setToolTip(
+            "La passe part en arrière-plan, la fenêtre reste utilisable. "
+            f"Elle est ignorée si une synchronisation a réussi il y a moins "
+            f"de {AUTO_SYNC_MIN_HOURS:.0f} heures."
+        )
+        # Enregistré au clic : cette case ne fait pas partie des réglages
+        # groupés sous « Enregistrer », et l'oublier serait la rendre inerte.
+        self.auto_sync.toggled.connect(
+            lambda coche: prefs.save_option("sync_au_demarrage", coche)
+        )
+        card.layout().addWidget(self.auto_sync)
+
+        detail = QLabel(
+            "Sans cette option, les données ne changent qu'en cliquant "
+            "« Synchroniser maintenant » ou par le planificateur."
+        )
+        detail.setObjectName("CardHint")
+        detail.setWordWrap(True)
+        card.layout().addWidget(detail)
+        return card
 
     # -- base ----------------------------------------------------------
 
@@ -458,6 +492,11 @@ class SettingsPage(QWidget):
 
     def load_values(self) -> None:
         values = prefs.load()
+        # Le signal servirait la valeur relue comme un choix de l'utilisateur,
+        # et réécrirait la préférence à chaque ouverture de la page.
+        self.auto_sync.blockSignals(True)
+        self.auto_sync.setChecked(prefs.load_option("sync_au_demarrage"))
+        self.auto_sync.blockSignals(False)
         self.dsn.setText(values.get("db_path", ""))
         self.secret.setText(values.get("secret_key", ""))
         self.strava_id.setText(values.get("strava_client_id", ""))

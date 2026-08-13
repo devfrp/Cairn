@@ -1324,3 +1324,84 @@ class TestFenetreDeSynchronisation:
 
         assert dt.date.today() not in jours
         assert max(jours) < dt.date.today()
+
+
+class TestSynchronisationAuDemarrage:
+    """Ouvrir l'application doit suffire à avoir des données fraîches.
+
+    Sans garde-fou, ouvrir dix fois dans la journée déclencherait dix passes :
+    Garmin coupe au-delà d'un certain rythme, et c'est ainsi qu'un 429 a été
+    servi une première fois.
+    """
+
+    def page(self, qt_app, monkeypatch, heures=None, comptes=True):
+        from cairn.gui import queries
+        from cairn.gui.pages import sync as module
+
+        monkeypatch.setattr(queries, "hours_since_last_sync", lambda: heures)
+        monkeypatch.setattr(
+            queries, "credentials_present",
+            lambda: {"garmin": comptes, "strava": False},
+        )
+        monkeypatch.setattr(module.queries, "hours_since_last_sync", lambda: heures)
+        monkeypatch.setattr(
+            module.queries, "credentials_present",
+            lambda: {"garmin": comptes, "strava": False},
+        )
+        return module.SyncPage()
+
+    def test_part_quand_la_derniere_passe_est_ancienne(self, qt_app, monkeypatch):
+        vue = self.page(qt_app, monkeypatch, heures=9.0)
+
+        assert vue.auto_start_reason() is None
+
+    def test_ne_part_pas_juste_apres_une_passe(self, qt_app, monkeypatch):
+        from cairn.gui.pages.sync import AUTO_SYNC_MIN_HOURS
+
+        vue = self.page(qt_app, monkeypatch, heures=AUTO_SYNC_MIN_HOURS - 0.1)
+
+        assert "moins de" in vue.auto_start_reason()
+
+    def test_premiere_utilisation_part(self, qt_app, monkeypatch):
+        """Aucune passe jamais réussie : il n'y a rien à ménager."""
+        vue = self.page(qt_app, monkeypatch, heures=None)
+
+        assert vue.auto_start_reason() is None
+
+    def test_sans_compte_relie_rien_ne_part(self, qt_app, monkeypatch):
+        vue = self.page(qt_app, monkeypatch, heures=99.0, comptes=False)
+
+        assert vue.auto_start_reason() == "aucun compte relié"
+
+    def test_le_refus_est_consigne(self, qt_app, monkeypatch):
+        """Qui a coché l'option doit comprendre pourquoi rien ne bouge."""
+        vue = self.page(qt_app, monkeypatch, heures=0.5)
+
+        assert vue.start_auto() is False
+        assert "ignorée" in vue.log.toPlainText()
+
+    def test_une_passe_en_cours_nen_declenche_pas_une_seconde(self, qt_app, monkeypatch):
+        vue = self.page(qt_app, monkeypatch, heures=99.0)
+        vue._worker = object()
+
+        assert vue.auto_start_reason() == "une passe est déjà en cours"
+
+    def test_option_persistee(self, qt_app, monkeypatch, tmp_path):
+        from cairn.gui import prefs
+
+        monkeypatch.setattr(prefs, "app_directory", lambda: tmp_path)
+        (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
+
+        assert prefs.load_option("sync_au_demarrage") is False
+        prefs.save_option("sync_au_demarrage", True)
+        assert prefs.load_option("sync_au_demarrage") is True
+
+    def test_option_desactivee_par_defaut(self, qt_app, monkeypatch, tmp_path):
+        """Une application qui appelle le réseau sans qu'on l'ait demandé
+        surprend : l'option s'active, elle ne se subit pas."""
+        from cairn.gui import prefs
+
+        monkeypatch.setattr(prefs, "app_directory", lambda: tmp_path)
+        (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
+
+        assert prefs.load_option("sync_au_demarrage") is False

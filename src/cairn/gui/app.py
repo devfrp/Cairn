@@ -58,6 +58,9 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(path)))
 
         self._probe: Worker | None = None
+        # La passe d'ouverture ne part qu'une fois : le sondage de la base se
+        # répète toutes les trente secondes, et c'est lui qui la déclenche.
+        self._auto_sync_done = False
 
         self.pages = QStackedWidget()
         self.dashboard = DashboardPage()
@@ -91,6 +94,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(prefs.describe_location())
 
         self.sync.finished_run.connect(self.refresh)
+        self.sync.finished_run.connect(self._restore_status)
         self.settings.settings_changed.connect(self.refresh)
 
         self._timer = QTimer(self)
@@ -194,6 +198,29 @@ class MainWindow(QMainWindow):
         current = self.pages.currentWidget()
         if hasattr(current, "refresh"):
             current.refresh(health)
+
+        if health.usable and not self._auto_sync_done:
+            self._auto_sync_done = True
+            self._maybe_auto_sync()
+
+    def _maybe_auto_sync(self) -> None:
+        """Passe d'ouverture, si l'utilisateur l'a demandée.
+
+        Déclenchée après le premier sondage réussi, jamais avant : lancée au
+        montage de la fenêtre, elle se serait heurtée à une base dont le schéma
+        n'est pas encore installé. Elle passe par la page de synchronisation
+        pour que le journal, la barre de progression et le rafraîchissement des
+        autres pages fonctionnent comme pour un clic.
+        """
+        if not prefs.load_option("sync_au_demarrage"):
+            return
+        if self.sync.start_auto():
+            # Sans délai d'expiration : c'est la fin de la passe qui remet le
+            # message d'origine. Un message minuté aurait laissé la barre vide.
+            self.statusBar().showMessage("Synchronisation en cours…")
+
+    def _restore_status(self) -> None:
+        self.statusBar().showMessage(prefs.describe_location())
 
 
 def _emit(line: str) -> None:

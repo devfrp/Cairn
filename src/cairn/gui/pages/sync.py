@@ -20,6 +20,10 @@ from cairn.gui.widgets import Card, SectionHeader, StatusPill
 from cairn.gui.workers import Worker
 from cairn.text import pluriel
 
+# Délai en deçà duquel l'ouverture de l'application ne relance rien. Aligné sur
+# la cadence retenue pour le projet : au-delà, on ne gagne que des appels d'API.
+AUTO_SYNC_MIN_HOURS = 4.0
+
 
 class SyncPage(QWidget):
     """Déclenche les passes et rend compte de leur déroulement.
@@ -186,6 +190,35 @@ class SyncPage(QWidget):
             lambda: run_all(mode=mode),
             f"Synchronisation ({'rattrapage' if mode == 'backfill' else 'incrémentale'})",
         )
+
+    def auto_start_reason(self) -> str | None:
+        """Pourquoi la passe automatique ne part pas, ou None si elle peut.
+
+        Rendre la raison plutôt qu'un booléen : le refus s'affiche dans le
+        journal de la page, sans quoi l'utilisateur qui a coché l'option ne
+        comprendrait pas qu'il ne se passe rien.
+        """
+        if self._worker is not None:
+            return "une passe est déjà en cours"
+        if not any(queries.credentials_present().values()):
+            return "aucun compte relié"
+
+        ecoule = queries.hours_since_last_sync()
+        if ecoule is not None and ecoule < AUTO_SYNC_MIN_HOURS:
+            # Ouvrir l'application dix fois dans la journée ne doit pas
+            # déclencher dix passes : Garmin coupe au-delà d'un certain rythme,
+            # et c'est ainsi qu'on s'est fait renvoyer un 429.
+            return f"synchronisé il y a moins de {AUTO_SYNC_MIN_HOURS:.0f} h"
+        return None
+
+    def start_auto(self) -> bool:
+        """Lance la passe d'ouverture si elle a lieu d'être."""
+        refus = self.auto_start_reason()
+        if refus is not None:
+            self._append(f"── Synchronisation au démarrage ignorée : {refus}.")
+            return False
+        self._start("incremental")
+        return True
 
     def _start_streams(self) -> None:
         from cairn.sync.streams import backfill

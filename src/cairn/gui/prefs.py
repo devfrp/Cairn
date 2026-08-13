@@ -159,6 +159,26 @@ def save_view(key: str, value: str) -> None:
     store.sync()
 
 
+def load_option(key: str, default: bool = False) -> bool:
+    """Option de comportement — synchroniser au démarrage, par exemple.
+
+    Séparée de `load_view` : celle-ci porte sur ce qui est affiché, celle-là
+    sur ce que l'application fait d'elle-même. Ni l'une ni l'autre n'est
+    publiée dans l'environnement, contrairement aux clés de `FIELDS`.
+    """
+    stocke = _store().value(f"options/{key}")
+    if stocke is None:
+        return default
+    # QSettings rend « true »/« false » en texte selon le format de stockage.
+    return str(stocke).lower() in {"true", "1", "yes"}
+
+
+def save_option(key: str, value: bool) -> None:
+    store = _store()
+    store.setValue(f"options/{key}", bool(value))
+    store.sync()
+
+
 def describe_location() -> str:
     if is_portable():
         return f"Mode portable — {portable_file()}"
