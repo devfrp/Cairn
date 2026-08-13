@@ -342,6 +342,103 @@ class TestGraphiqueDeTendances:
 
         assert chart._spans[0]["end"] <= len(chart._days) - 1
 
+    def test_colonne_selargit_pour_les_titres_longs(self, qt_app):
+        """« Distance à l'entraînement » débordait sur le graphe."""
+        from cairn.gui.widgets import TrendChart
+
+        chart = self.chart(qt_app)
+        chart.set_data(["a", "b"], [self.serie("Distance à l'entraînement", [1, 2])])
+
+        assert chart.LABEL_WIDTH > TrendChart.LABEL_WIDTH
+        assert chart.LABEL_WIDTH <= TrendChart.LABEL_MAX
+
+    def test_colonne_bornee(self, qt_app):
+        """Un titre démesuré ne doit pas manger la moitié du graphe."""
+        from cairn.gui.widgets import TrendChart
+
+        chart = self.chart(qt_app)
+        chart.set_data(["a", "b"], [self.serie("t" * 200, [1, 2])])
+
+        assert chart.LABEL_WIDTH == TrendChart.LABEL_MAX
+
+    def test_valeur_affichee_contre_son_point(self, qt_app):
+        """L'encart unique masquait le tiers du graphe à dix bandes."""
+        chart = self.chart(qt_app)
+        chart.set_data(
+            [f"2026-08-{d:02d}" for d in range(1, 11)],
+            [self.serie("x", list(range(10)))],
+        )
+        chart.resize(600, chart.minimumHeight())
+        chart._hover = 5
+
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage
+
+        image = QImage(QSize(chart.width(), chart.height()), QImage.Format.Format_ARGB32)
+        image.fill(0)
+        chart.render(image)
+
+        step = (chart.width() - chart.LABEL_WIDTH - chart.RIGHT_MARGIN) / 9
+        x = int(chart.LABEL_WIDTH + 5 * step)
+        haut = chart.BAND_SPACING
+        # La pastille se pose juste à droite du point, dans la bande.
+        proche = any(
+            image.pixelColor(x + delta, y).name() != image.pixelColor(x + delta, 2).name()
+            for delta in range(12, 40)
+            for y in range(haut, haut + chart.BAND_HEIGHT)
+        )
+        assert proche
+
+    def test_clic_sur_un_jour_le_signale(self, qt_app):
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        chart = self.chart(qt_app)
+        chart.resize(600, 200)
+        chart.set_data(
+            [f"2026-08-{d:02d}" for d in range(1, 11)],
+            [self.serie("x", list(range(10)))],
+        )
+        recus = []
+        chart.day_clicked.connect(recus.append)
+
+        chart.mousePressEvent(
+            QMouseEvent(
+                QMouseEvent.Type.MouseButtonPress,
+                QPointF(chart.LABEL_WIDTH, 50),
+                QPointF(chart.LABEL_WIDTH, 50),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+
+        assert recus == ["2026-08-01"]
+
+    def test_pas_de_clic_en_vue_journee(self, qt_app):
+        """Une heure ne s'ouvre pas : il n'y a rien en dessous."""
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        chart = self.chart(qt_app)
+        chart.resize(600, 200)
+        chart.set_data(["00:00", "00:05"], [self.serie("x", [1, 2])], mode="time")
+        recus = []
+        chart.day_clicked.connect(recus.append)
+
+        chart.mousePressEvent(
+            QMouseEvent(
+                QMouseEvent.Type.MouseButtonPress,
+                QPointF(chart.LABEL_WIDTH, 50),
+                QPointF(chart.LABEL_WIDTH, 50),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+
+        assert recus == []
+
     def test_hauteur_reserve_laxe(self, qt_app):
         """Sans réserve, les dates se peignaient hors du cadre."""
         chart = self.chart(qt_app)
@@ -1023,3 +1120,50 @@ class TestChoixDesChamps:
         vue._set_trend_days(1)
 
         assert vue._sous_menus == {}
+
+    def test_clic_sur_un_jour_ouvre_le_detail(self, page, monkeypatch):
+        """Repérer un creux puis retrouver sa date à la main était le chaînon manquant."""
+        from cairn.gui import queries
+
+        vue, _ = page
+        monkeypatch.setattr(
+            queries, "intraday_bounds",
+            lambda: {"first_day": "2026-07-01", "last_day": "2026-08-10"},
+        )
+        monkeypatch.setattr(queries, "intraday", lambda j=None: queries.Intraday(day=j or ""))
+
+        vue._open_day("2026-07-15")
+
+        assert vue._jour == "2026-07-15"
+        assert vue._trend_days == 1
+
+    def test_jour_hors_plage_ramene_dans_les_bornes(self, page, monkeypatch):
+        """Un jour sans relevé continu ouvrirait un graphe vide."""
+        from cairn.gui import queries
+
+        vue, _ = page
+        monkeypatch.setattr(
+            queries, "intraday_bounds",
+            lambda: {"first_day": "2026-07-01", "last_day": "2026-08-10"},
+        )
+        monkeypatch.setattr(queries, "intraday", lambda j=None: queries.Intraday(day=j or ""))
+
+        vue._open_day("2026-01-01")
+
+        assert vue._jour == "2026-07-01"
+
+    def test_fleches_sans_effet_hors_vue_journee(self, page, monkeypatch):
+        """Sur trente jours, les flèches doivent rester au défilement."""
+        from cairn.gui import queries
+
+        vue, _ = page
+        appels = []
+        monkeypatch.setattr(
+            queries, "intraday_bounds",
+            lambda: appels.append(1) or {"first_day": "2026-07-01", "last_day": "2026-08-10"},
+        )
+
+        vue._shift_day(-1)
+
+        assert appels == []
+        assert vue._jour is None

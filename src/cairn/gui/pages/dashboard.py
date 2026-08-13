@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -400,7 +400,15 @@ class DashboardPage(QWidget):
         trends.layout().addWidget(self.trend_hint)
 
         self.trend_chart = TrendChart()
+        self.trend_chart.day_clicked.connect(self._open_day)
         trends.layout().addWidget(self.trend_chart)
+
+        # Les flèches font défiler les jours sans quitter le clavier. Portée
+        # limitée à la page : ailleurs, elles doivent rester au défilement.
+        for touche, pas in ((Qt.Key.Key_Left, -1), (Qt.Key.Key_Right, 1)):
+            raccourci = QShortcut(QKeySequence(touche), self)
+            raccourci.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            raccourci.activated.connect(lambda d=pas: self._shift_day(d))
 
         self._rebuild_field_menu()
         return trends
@@ -493,8 +501,23 @@ class DashboardPage(QWidget):
         self._refresh_menu_counts()
         self._render_chart()
 
+    def _open_day(self, jour: str) -> None:
+        """Bascule sur la vue détaillée du jour cliqué."""
+        bornes = queries.intraday_bounds()
+        if not bornes["last_day"]:
+            return
+        premier = dt.date.fromisoformat(bornes["first_day"])
+        dernier = dt.date.fromisoformat(bornes["last_day"])
+        vise = dt.date.fromisoformat(jour[:10])
+        # Cliquer une journée sans relevé continu ouvrirait un graphe vide :
+        # on s'arrête à la plus proche que la montre ait couverte.
+        self._jour = min(max(vise, premier), dernier).isoformat()
+        self._set_trend_days(1)
+
     def _shift_day(self, delta: int) -> None:
         """Passe au jour voisin, sans sortir de la plage relevée."""
+        if self._trend_days != 1:
+            return
         bornes = queries.intraday_bounds()
         if not bornes["last_day"]:
             return

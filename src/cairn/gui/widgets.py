@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -408,12 +408,19 @@ class TrendChart(QWidget):
 
     BAND_HEIGHT = 82
     BAND_SPACING = 40
+    # Largeur minimale de la colonne de gauche. La vraie est calculée à chaque
+    # jeu de données : « Distance à l'entraînement » débordait de la colonne
+    # et venait s'écrire par-dessus le graphe.
     LABEL_WIDTH = 132
+    LABEL_MAX = 220
     RIGHT_MARGIN = 12
     AXIS_HEIGHT = 22
 
     # Teintes des plages de fond : une nuit et une séance ne se confondent pas.
     SPAN_COLOURS = {"sleep": theme.SERIES[4], "activity": theme.ACCENT}
+
+    # Émis quand on clique un jour du graphe, pour l'ouvrir en détail.
+    day_clicked = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -445,6 +452,23 @@ class TrendChart(QWidget):
         # Une série entièrement vide n'apprend rien et volerait de la hauteur.
         self._series = [s for s in series if any(v is not None for v in s["values"])]
         self._hover = None
+
+        metrics = QFontMetrics(self.font())
+        self.LABEL_WIDTH = min(
+            self.LABEL_MAX,
+            max(
+                type(self).LABEL_WIDTH,
+                max(
+                    (metrics.horizontalAdvance(s["label"]) + 14 for s in self._series),
+                    default=0,
+                ),
+            ),
+        )
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if mode == "day"
+            else Qt.CursorShape.ArrowCursor
+        )
         self.setMinimumHeight(
             max(1, len(self._series)) * (self.BAND_HEIGHT + self.BAND_SPACING)
             + self.AXIS_HEIGHT
@@ -473,6 +497,16 @@ class TrendChart(QWidget):
         if index != self._hover:
             self._hover = index
             self.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 — API Qt
+        """Un clic sur une journée demande à l'ouvrir en détail.
+
+        Repérer un creux puis devoir retrouver sa date à la main dans un
+        sélecteur était le chaînon manquant entre les deux vues.
+        """
+        index = self._index_at(event.position().x())
+        if self._mode == "day" and index is not None:
+            self.day_clicked.emit(self._days[index])
 
     def leaveEvent(self, event) -> None:  # noqa: N802 — API Qt
         self._hover = None
@@ -646,13 +680,41 @@ class TrendChart(QWidget):
         if self._hover is not None and self._hover < len(values):
             value = values[self._hover]
             if value is not None:
+                x = self.LABEL_WIDTH + self._hover * step
                 painter.setBrush(QColor(serie["colour"]))
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(
-                    QRectF(self.LABEL_WIDTH + self._hover * step - 3.5, y_of(value) - 3.5, 7, 7)
+                painter.drawEllipse(QRectF(x - 3.5, y_of(value) - 3.5, 7, 7))
+                self._paint_value_tag(
+                    painter, metrics, x, y_of(value), unit(value), serie["colour"]
                 )
 
+    def _paint_value_tag(self, painter, metrics, x, y, texte, couleur) -> None:
+        """Valeur posée contre son propre point, dans sa propre bande.
+
+        L'encart unique qui les rassemblait toutes grandissait avec le nombre
+        de mesures : à dix bandes, il masquait le tiers du graphe, et il
+        fallait faire l'aller-retour entre une ligne de texte et une courbe
+        pour savoir laquelle valait quoi.
+        """
+        largeur = metrics.horizontalAdvance(texte) + 12
+        hauteur = metrics.height() + 4
+        gauche = x + 10
+        if gauche + largeur > self.width() - 2:
+            gauche = x - largeur - 10
+
+        painter.setPen(theme.qcolor(couleur, 150))
+        painter.setBrush(theme.qcolor(theme.BG, 235))
+        painter.drawRoundedRect(QRectF(gauche, y - hauteur / 2, largeur, hauteur), 4, 4)
+
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(
+            QRectF(gauche, y - hauteur / 2, largeur, hauteur),
+            Qt.AlignmentFlag.AlignCenter,
+            texte,
+        )
+
     def _paint_cursor(self, painter, metrics, step) -> None:
+        """Trait vertical et date. Les valeurs, elles, sont dans les bandes."""
         x = self.LABEL_WIDTH + self._hover * step
         pen = QPen(QColor(theme.MUTED))
         pen.setWidthF(1.0)
@@ -660,29 +722,22 @@ class TrendChart(QWidget):
         painter.setPen(pen)
         painter.drawLine(int(x), 4, int(x), self.height() - 4)
 
-        lignes = [self._cursor_label(self._days[self._hover])]
-        for serie in self._series:
-            value = serie["values"][self._hover] if self._hover < len(serie["values"]) else None
-            texte = serie["unit"](value) if value is not None else "—"
-            lignes.append(f"{serie['label']} : {texte}")
-
-        largeur = max(metrics.horizontalAdvance(t) for t in lignes) + 18
-        hauteur = len(lignes) * (metrics.height() + 2) + 12
-        # L'encart bascule à gauche du curseur quand il déborderait du cadre.
-        gauche = x + 12
-        if gauche + largeur > self.width():
-            gauche = x - largeur - 12
-        haut = 6
+        # Sur l'axe des dates plutôt qu'en tête du graphe : c'est là qu'on
+        # cherche une date, et la pastille y recouvre les graduations
+        # voisines, qu'elle remplace le temps du survol.
+        texte = self._cursor_label(self._days[self._hover])
+        largeur = metrics.horizontalAdvance(texte) + 16
+        hauteur = metrics.height() + 6
+        gauche = min(max(x - largeur / 2, 2.0), self.width() - largeur - 2)
+        haut = len(self._series) * (self.BAND_HEIGHT + self.BAND_SPACING) + 4
 
         painter.setPen(QColor(theme.BORDER))
         painter.setBrush(QColor(theme.BG))
-        painter.drawRoundedRect(QRectF(gauche, haut, largeur, hauteur), 6, 6)
-
-        y = haut + metrics.ascent() + 6
-        for rank, texte in enumerate(lignes):
-            painter.setPen(QColor(theme.TEXT if rank == 0 else theme.MUTED))
-            painter.drawText(int(gauche + 9), int(y), texte)
-            y += metrics.height() + 2
+        painter.drawRoundedRect(QRectF(gauche, haut, largeur, hauteur), 5, 5)
+        painter.setPen(QColor(theme.TEXT))
+        painter.drawText(
+            QRectF(gauche, haut, largeur, hauteur), Qt.AlignmentFlag.AlignCenter, texte
+        )
 
     def _axis_label(self, valeur: str) -> str:
         if self._mode == "time":
