@@ -37,6 +37,7 @@ from cairn.gui.widgets import (
     format_relative_day,
 )
 from cairn.gui.workers import Worker
+from cairn.text import pluriel
 
 # Seuils d'interprétation de la variation de charge d'une semaine à l'autre.
 # Au-delà de +30 %, la progression est plus rapide que ce qu'on conseille
@@ -574,7 +575,7 @@ class DashboardPage(QWidget):
         if nuits:
             details.append("sommeil ombré en violet")
         if sorties:
-            details.append(f"{sorties} séance{'s' if sorties > 1 else ''} en orange")
+            details.append(f"{pluriel(sorties, 'séance')} en orange")
         return " · ".join(details) + " — survolez pour lire une minute précise."
 
     # -- résumé hebdomadaire -------------------------------------------
@@ -802,7 +803,7 @@ class DashboardPage(QWidget):
     def _fill_load(self, load: queries.Load) -> None:
         trend = load.trend_pct
         if trend is None:
-            hint = f"{load.week_sessions} sortie(s)"
+            hint = pluriel(load.week_sessions, "sortie")
             colour = None
         else:
             direction = "+" if trend >= 0 else ""
@@ -816,7 +817,8 @@ class DashboardPage(QWidget):
 
         self.week_volume.set_value(
             format_duration(load.week_duration_s),
-            f"{format_distance(load.week_distance_m)} · {load.week_sessions} sortie(s)",
+            f"{format_distance(load.week_distance_m)} · "
+            f"{pluriel(load.week_sessions, 'sortie')}",
         )
         self.week_elevation.set_value(format_elevation(load.week_elevation_m), "cumulé")
         self.month_load.set_value(f"{load.month_load:.0f}", "sur 4 semaines")

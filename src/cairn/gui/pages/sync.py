@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from cairn.gui import queries, theme
 from cairn.gui.widgets import Card, SectionHeader, StatusPill
 from cairn.gui.workers import Worker
+from cairn.text import pluriel
 
 
 class SyncPage(QWidget):
@@ -144,7 +145,7 @@ class SyncPage(QWidget):
             if entry["consecutive_errors"]:
                 errors = (
                     f" · <span style='color:{theme.DANGER}'>"
-                    f"{entry['consecutive_errors']} erreur(s)</span>"
+                    f"{pluriel(entry['consecutive_errors'], 'erreur')}</span>"
                 )
 
             lines.append(

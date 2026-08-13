@@ -26,6 +26,7 @@ from cairn.gui.widgets import (
     format_elevation,
     row,
 )
+from cairn.text import pluriel
 
 
 def _fold(text: str) -> str:
@@ -244,7 +245,10 @@ class ActivitiesPage(QWidget):
 
         merged = sum(1 for e in rows if len({s for s in (e.get("sources") or []) if s}) > 1)
         if rows:
-            detail = f"{len(rows)} sortie(s) · {merged} vue(s) des deux sources"
+            detail = (
+                f"{pluriel(len(rows), 'sortie')} · "
+                f"{pluriel(merged, 'vue')} des deux sources"
+            )
             if needle or wanted:
                 detail += f" · sur {len(self._all)}"
             self.summary.setText(detail)

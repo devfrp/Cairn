@@ -289,81 +289,19 @@ def check_ollama() -> None:
 def scheduler() -> None:
     """Applique les migrations puis planifie la passe nocturne (processus long).
 
-    Tant que le backfill n'est pas terminé, la passe de nuit enchaîne un lot
-    de rattrapage après la passe incrémentale : l'historique se remplit tout
-    seul, nuit après nuit, sans intervention.
+    La construction des tâches vit dans `cairn.schedule` : enfermée ici, dans
+    une fonction qui ne rend jamais la main, elle n'était vérifiable qu'en
+    attendant l'heure dite.
     """
     import time
 
-    from apscheduler.schedulers.background import BackgroundScheduler
-
-    from cairn.db import fetch_all
     from cairn.migrate import upgrade
-    from cairn.sync.runner import run_all
-    from cairn.sync.streams import backfill as parse_streams
+    from cairn.schedule import build_scheduler, describe
 
-    settings = get_settings()
     upgrade()
-
-    def nightly() -> None:
-        run_all(mode="incremental")
-        pending = fetch_all(
-            "SELECT source, resource FROM sync_cursor WHERE NOT backfill_done"
-        )
-        if pending:
-            typer.echo(f"Backfill restant sur : {', '.join(r['resource'] for r in pending)}")
-            run_all(mode="backfill", sources=sorted({r["source"] for r in pending}))
-        # Les .fit fraîchement téléchargés sont parsés dans la foulée.
-        parse_streams()
-
-    def weekly_summary() -> None:
-        from cairn.insights import discord, weekly
-
-        result = weekly.generate()
-        if not settings.discord_webhook_url:
-            typer.echo("Résumé produit, aucun webhook configuré pour l'envoyer.")
-            return
-        try:
-            discord.send(
-                settings.discord_webhook_url,
-                discord.format_message(
-                    result["text"], result["start"], result["end"], result["source"]
-                ),
-            )
-        except discord.DiscordUnavailable as exc:
-            typer.echo(f"Envoi Discord impossible : {exc}")
-            return
-        discord.mark_delivered(result["start"])
-
-    sched = BackgroundScheduler(timezone=settings.timezone)
-    sched.add_job(
-        nightly,
-        "cron",
-        hour=settings.sync_hour,
-        minute=0,
-        id="nightly-sync",
-        misfire_grace_time=3600,
-        coalesce=True,
-    )
-    # Le résumé part après la passe de nuit, une fois la semaine consolidée.
-    sched.add_job(
-        weekly_summary,
-        "cron",
-        day_of_week=settings.summary_weekday,
-        hour=(settings.sync_hour + 3) % 24,
-        minute=0,
-        id="weekly-summary",
-        misfire_grace_time=7200,
-        coalesce=True,
-    )
-
+    sched = build_scheduler()
     sched.start()
-    jours = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
-    typer.echo(
-        f"Planificateur démarré : passe quotidienne à {settings.sync_hour}h00 "
-        f"({settings.timezone}), résumé hebdomadaire le "
-        f"{jours[settings.summary_weekday]}."
-    )
+    typer.echo(describe())
     try:
         while True:
             time.sleep(3600)

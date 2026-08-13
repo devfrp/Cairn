@@ -27,6 +27,7 @@ from cairn.gui.widgets import (
     format_elevation,
     row,
 )
+from cairn.text import pluriel
 
 # Une couleur par zone, du calme à l'intense.
 ZONE_COLOURS = ("#6b9bd2", "#5fa87a", "#d9a441", "#e8834a", "#d9614b")
@@ -290,7 +291,7 @@ class AnalysisPage(QWidget):
         sessions = sum(r["sessions"] for r in rows)
         duration = sum(r["duration_s"] or 0 for r in rows)
         self.summary.setText(
-            f"{sessions} sortie(s) · {format_duration(duration)} au total"
+            f"{pluriel(sessions, 'sortie')} · {format_duration(duration)} au total"
         )
 
     def _fill_weekly(self, rows: list[dict]) -> None:

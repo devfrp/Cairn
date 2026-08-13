@@ -2,6 +2,8 @@
 
 import datetime as dt
 
+import pytest
+
 from cairn.insights.discord import MAX_CONTENT, format_message
 from cairn.insights.facts import (
     HRV_SUPPRESSED_DAYS,
@@ -178,7 +180,7 @@ class TestPrompt:
         text = render_prompt(facts())
         assert "612" in text
         assert "142 km" in text
-        assert "5 séance(s)" in text
+        assert "5 séances" in text
 
     def test_mentionne_la_ligne_de_base(self):
         text = render_prompt(facts())
@@ -191,7 +193,8 @@ class TestPrompt:
 
     def test_bilan_vide_reste_lisible(self):
         text = render_prompt(WeeklyFacts(start=START, end=END))
-        assert "0 séance(s)" in text
+        # Zéro prend le singulier en français.
+        assert "0 séance," in text
 
 
 class TestFallback:
@@ -334,3 +337,168 @@ class TestModeleNonSollicitéParDefaut:
 
         assert "n'établis aucun lien" in SYSTEM_PROMPT
         assert "aucun conseil de ton cru" in SYSTEM_PROMPT
+
+
+class TestEnvoiDiscord:
+    """Le seul chemin de Cairn vers l'extérieur, jamais couvert jusqu'ici."""
+
+    def test_sans_webhook_le_dit(self):
+        from cairn.insights.discord import DiscordUnavailable, send
+
+        with pytest.raises(DiscordUnavailable, match="Aucun webhook"):
+            send("", "peu importe")
+
+    def test_refus_de_discord_remonte(self, respx_mock):
+        import httpx
+
+        from cairn.insights.discord import DiscordUnavailable, send
+
+        respx_mock.post("https://discord.test/hook").mock(
+            return_value=httpx.Response(404)
+        )
+
+        with pytest.raises(DiscordUnavailable, match="refusé"):
+            send("https://discord.test/hook", "salut")
+
+    def test_message_sans_mention(self, respx_mock):
+        """Un résumé ne doit réveiller personne : pas de @everyone possible."""
+        import httpx
+
+        from cairn.insights.discord import send
+
+        route = respx_mock.post("https://discord.test/hook").mock(
+            return_value=httpx.Response(204)
+        )
+
+        send("https://discord.test/hook", "@everyone coucou")
+
+        import json
+
+        envoye = json.loads(route.calls[0].request.content)
+        assert envoye["allowed_mentions"] == {"parse": []}
+
+    def test_texte_trop_long_tronque(self):
+        """Discord refuse au-delà de sa limite ; mieux vaut couper nous-mêmes."""
+        from cairn.insights.discord import MAX_CONTENT, format_message
+
+        message = format_message("x" * 5000, START, END, "model")
+
+        assert len(message) < MAX_CONTENT + 100
+        assert message.endswith("…")
+
+    def test_origine_signalee_quand_le_modele_na_pas_ecrit(self):
+        from cairn.insights.discord import format_message
+
+        assert "sans modèle" in format_message("t", START, END, "fallback")
+        assert "sans modèle" not in format_message("t", START, END, "model")
+
+
+class TestPlanificateur:
+    """Les tâches de fond ne réveillent personne quand elles échouent.
+
+    Leur construction vivait dans une commande qui ne rend jamais la main :
+    vérifier l'heure de départ imposait d'attendre l'heure de départ.
+    """
+
+    def settings(self, **overrides):
+        from cairn.config import Settings
+
+        return Settings(**{"db_path": "x.db", "secret_key": "k" * 44, **overrides})
+
+    def test_jour_du_resume_est_bien_celui_annonce(self):
+        """APScheduler compte le lundi comme zéro, contrairement à cron."""
+        import datetime as dt
+
+        from cairn.schedule import build_scheduler
+
+        sched = build_scheduler(self.settings(summary_weekday=2, sync_hour=4))
+        job = sched.get_job("weekly-summary")
+        prochaine = job.trigger.get_next_fire_time(
+            None, dt.datetime.now(job.trigger.timezone)
+        )
+
+        assert prochaine.isoweekday() == 3   # mercredi
+        assert prochaine.hour == 7           # 4 h + le délai de consolidation
+
+    def test_resume_apres_la_passe_de_nuit(self):
+        """Résumer avant la synchronisation donnerait la semaine d'avant."""
+        from cairn.schedule import SUMMARY_DELAY_H, build_scheduler
+
+        sched = build_scheduler(self.settings(sync_hour=23))
+        nuit = sched.get_job("nightly-sync").trigger
+        resume = sched.get_job("weekly-summary").trigger
+
+        assert {f.name: f for f in nuit.fields}["hour"].expressions[0].first == 23
+        # Le passage de minuit ne doit pas renvoyer le résumé à la veille.
+        assert {f.name: f for f in resume.fields}["hour"].expressions[0].first == (
+            23 + SUMMARY_DELAY_H
+        ) % 24
+
+    def test_une_tache_en_echec_nemporte_pas_le_planificateur(self, monkeypatch):
+        """Une exception qui traverse un travail de fond ne réveille personne.
+
+        Sans ce filet, une coupure réseau à 4 h arrêtait la tâche sans que
+        rien n'en garde trace.
+        """
+        from cairn import schedule
+
+        consigne = []
+        monkeypatch.setattr(
+            schedule.log, "exception",
+            lambda *args, **kwargs: consigne.append(kwargs.get("tache")),
+        )
+
+        def casse():
+            raise RuntimeError("réseau coupé")
+
+        schedule._guarded(casse, "essai")()   # ne doit pas lever
+
+        assert consigne == ["essai"]
+
+    def test_rattrapage_dune_execution_manquee(self):
+        """Poste éteint à 4 h : la passe doit partir au réveil, pas disparaître."""
+        from cairn.schedule import build_scheduler
+
+        sched = build_scheduler(self.settings())
+
+        assert sched.get_job("nightly-sync").misfire_grace_time >= 3600
+        assert sched.get_job("nightly-sync").coalesce is True
+
+    def test_resume_sans_webhook_ne_tente_pas_lenvoi(self, monkeypatch):
+        from cairn.insights import weekly
+        from cairn.schedule import weekly_summary
+
+        monkeypatch.setattr(
+            weekly, "generate",
+            lambda: {"text": "t", "start": START, "end": END, "source": "fallback"},
+        )
+        envois = []
+        from cairn.insights import discord
+
+        monkeypatch.setattr(discord, "send", lambda *a, **k: envois.append(a))
+
+        resultat = weekly_summary(self.settings(discord_webhook_url=""))
+
+        assert resultat == {"generated": True, "delivered": False, "reason": "aucun webhook"}
+        assert envois == []
+
+    def test_echec_denvoi_ne_marque_pas_la_livraison(self, monkeypatch):
+        """Marquer un résumé livré alors qu'il ne l'est pas le perdrait."""
+        from cairn.insights import discord, weekly
+        from cairn.schedule import weekly_summary
+
+        monkeypatch.setattr(
+            weekly, "generate",
+            lambda: {"text": "t", "start": START, "end": END, "source": "model"},
+        )
+        monkeypatch.setattr(
+            discord, "send",
+            lambda *a, **k: (_ for _ in ()).throw(discord.DiscordUnavailable("hors ligne")),
+        )
+        marques = []
+        monkeypatch.setattr(discord, "mark_delivered", lambda d: marques.append(d))
+
+        resultat = weekly_summary(self.settings(discord_webhook_url="https://x.test/h"))
+
+        assert resultat["delivered"] is False
+        assert marques == []

@@ -1167,3 +1167,45 @@ class TestChoixDesChamps:
 
         assert appels == []
         assert vue._jour is None
+
+
+class TestAccordDuPluriel:
+    """« séance(s) » passe dans un journal, pas dans un message envoyé."""
+
+    def test_singulier(self):
+        from cairn.text import pluriel
+
+        assert pluriel(1, "séance") == "1 séance"
+
+    def test_pluriel(self):
+        from cairn.text import pluriel
+
+        assert pluriel(12, "séance") == "12 séances"
+
+    def test_zero_reste_au_singulier(self):
+        """Règle française : « 0 séance », et non « 0 séances »."""
+        from cairn.text import pluriel
+
+        assert pluriel(0, "séance") == "0 séance"
+
+    def test_forme_irreguliere(self):
+        from cairn.text import pluriel
+
+        assert pluriel(3, "cheval", "chevaux") == "3 chevaux"
+
+    def test_plus_aucune_forme_parenthesee(self):
+        """Garde-fou : la forme revient vite si personne ne la surveille."""
+        import pathlib
+
+        racine = pathlib.Path(__file__).resolve().parents[1] / "src" / "cairn"
+        fautifs = [
+            f"{chemin.relative_to(racine)}:{numero}"
+            for chemin in racine.rglob("*.py")
+            # Seul endroit où la forme a le droit d'apparaître : la docstring
+            # qui explique pourquoi elle n'a lieu nulle part ailleurs.
+            if chemin.name != "text.py"
+            for numero, ligne in enumerate(chemin.read_text().splitlines(), 1)
+            if "(s)" in ligne
+        ]
+
+        assert fautifs == []

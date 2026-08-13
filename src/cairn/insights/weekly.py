@@ -19,6 +19,7 @@ from cairn.db import connection
 from cairn.insights import facts as facts_module
 from cairn.insights.facts import WeeklyFacts
 from cairn.insights.ollama import OllamaClient, OllamaUnavailable, verify_numbers
+from cairn.text import pluriel
 
 log = structlog.get_logger(__name__)
 
@@ -61,7 +62,7 @@ def render_prompt(facts: WeeklyFacts) -> str:
         f"Semaine du {facts.start:%d/%m} au {facts.end:%d/%m}.",
         "",
         "ENTRAÎNEMENT",
-        f"- {facts.sessions} séance(s), {_hours(facts.duration_s)} au total",
+        f"- {pluriel(facts.sessions, 'séance')}, {_hours(facts.duration_s)} au total",
         f"- {facts.distance_m / 1000:.0f} km, {facts.elevation_m:.0f} m de dénivelé positif",
         f"- charge d'entraînement : {facts.load:.0f}",
     ]
@@ -76,7 +77,7 @@ def render_prompt(facts: WeeklyFacts) -> str:
 
     for entry in facts.by_sport:
         lines.append(
-            f"- {entry['sport']} : {entry['sessions']} séance(s), "
+            f"- {entry['sport']} : {pluriel(entry['sessions'], 'séance')}, "
             f"{_hours(entry['duration_s'])}, charge {entry['load']:.0f}"
         )
 
@@ -105,7 +106,9 @@ def render_prompt(facts: WeeklyFacts) -> str:
             f"durée moyenne {_hours(facts.sleep_mean_duration_s)}"
         )
     if facts.short_nights:
-        lines.append(f"- {facts.short_nights} nuit(s) de moins de 7 heures")
+        lines.append(
+            f"- {pluriel(facts.short_nights, 'nuit')} de moins de 7 heures"
+        )
 
     if facts.signals:
         lines += ["", "À SIGNALER"]
@@ -166,7 +169,7 @@ def fallback_summary(facts: WeeklyFacts) -> str:
 
     parts = [
         f"Semaine du {facts.start:%d/%m} au {facts.end:%d/%m} : "
-        f"{facts.sessions} séance(s), {_hours(facts.duration_s)}, "
+        f"{pluriel(facts.sessions, 'séance')}, {_hours(facts.duration_s)}, "
         f"{facts.distance_m / 1000:.0f} km et {facts.elevation_m:.0f} m de dénivelé, "
         f"pour une charge de {facts.load:.0f}."
     ]
