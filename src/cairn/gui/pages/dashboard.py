@@ -386,11 +386,16 @@ class DashboardPage(QWidget):
         self.btn_next_day.setFixedWidth(38)
         self.btn_next_day.clicked.connect(lambda: self._shift_day(1))
 
+        self.btn_today = QPushButton("Aujourd'hui")
+        self.btn_today.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_today.clicked.connect(self._open_today)
+
         self.day_label = QLabel("—")
         self.day_label.setObjectName("SectionTitle")
 
         barre.addWidget(self.btn_prev_day)
         barre.addWidget(self.btn_next_day)
+        barre.addWidget(self.btn_today)
         barre.addWidget(self.day_label)
         barre.addStretch(1)
         self.day_bar.hide()
@@ -502,6 +507,10 @@ class DashboardPage(QWidget):
         self._refresh_menu_counts()
         self._render_chart()
 
+    def _open_today(self) -> None:
+        """Ramène la vue sur la journée en cours."""
+        self._open_day(dt.date.today().isoformat())
+
     def _open_day(self, jour: str) -> None:
         """Bascule sur la vue détaillée du jour cliqué."""
         bornes = queries.intraday_bounds()
@@ -553,6 +562,7 @@ class DashboardPage(QWidget):
             self.trend_chart.set_data(self._intra.labels, series, mode="time", spans=spans)
             self.day_label.setText(format_long_day(self._intra.day) if self._intra.day else "—")
             self.trend_hint.setText(self._journee_hint())
+            self.btn_today.setEnabled(self._intra.day != dt.date.today().isoformat())
         else:
             self.trend_chart.set_data(self._metrics.days, series)
             self.trend_hint.setText(
@@ -568,12 +578,23 @@ class DashboardPage(QWidget):
 
     def _journee_hint(self) -> str:
         if not self._intra.day:
-            return "Aucun relevé continu dans la base pour l'instant."
-        nuits = sum(1 for s in self._intra.spans if s["kind"] == "sleep")
-        sorties = sum(1 for s in self._intra.spans if s["kind"] == "activity")
-        details = [f"{_pas(self._intra.readings)} relevés"]
-        if nuits:
+            return "Aucune journée détaillée dans la base pour l'instant."
+
+        details = []
+        aujourdhui = dt.date.today().isoformat()
+        if self._intra.day == aujourdhui:
+            # Une journée en cours s'arrête là où la montre en est : le dire
+            # évite de lire la fin de courbe comme une montre retirée.
+            details.append("journée en cours")
+        elif self._intra.day < aujourdhui:
+            retard = (dt.date.today() - dt.date.fromisoformat(self._intra.day)).days
+            if retard > 1:
+                details.append(f"il y a {pluriel(retard, 'jour')}")
+
+        details.append(f"{_pas(self._intra.readings)} relevés")
+        if any(s["kind"] == "sleep" for s in self._intra.spans):
             details.append("sommeil ombré en violet")
+        sorties = sum(1 for s in self._intra.spans if s["kind"] == "activity")
         if sorties:
             details.append(f"{pluriel(sorties, 'séance')} en orange")
         return " · ".join(details) + " — survolez pour lire une minute précise."

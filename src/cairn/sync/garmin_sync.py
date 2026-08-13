@@ -294,8 +294,14 @@ def _wellness_days(mode: str, cursor: dict[str, Any]) -> list[dt.date]:
     today = dt.date.today()
 
     if mode == "incremental":
+        # La journée en cours est comprise. Elle est forcément partielle, mais
+        # l'écarter coûtait plus qu'elle ne rapportait : la nuit qui vient de
+        # s'achever porte la date du réveil, et n'apparaissait donc que le
+        # lendemain — la carte « Sommeil » affichait l'avant-dernière nuit
+        # toute la journée. La passe suivante repassera dessus et la
+        # complétera, les upserts remplaçant les valeurs provisoires.
         span = settings.incremental_lookback_days
-        return [today - dt.timedelta(days=i) for i in range(1, span + 1)]
+        return [today - dt.timedelta(days=i) for i in range(span + 1)]
 
     # Backfill : on descend vers le passé depuis la position mémorisée.
     if cursor.get("backfill_done"):

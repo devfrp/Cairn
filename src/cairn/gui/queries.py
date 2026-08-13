@@ -407,20 +407,54 @@ INTRADAY_BUCKET_MIN = 5
 
 
 def intraday_bounds() -> dict[str, Any]:
-    """Premier et dernier jour disposant de relevés continus.
+    """Premier et dernier jour que la vue détaillée a quelque chose à montrer.
 
-    Les bornes sont prises sur l'instant brut, puis ramenées à l'heure locale
-    en Python : demander à SQLite `min(date(time, 'localtime'))` l'oblige à
-    convertir les cent soixante-dix mille lignes une à une, soit un demi-quart
-    de seconde pour deux dates.
+    Trois sources, pas une : une journée peut n'avoir aucun relevé continu et
+    porter tout de même une séance et une nuit. S'en tenir à
+    `wellness_reading` interdisait de naviguer jusqu'à aujourd'hui tant que la
+    montre n'avait pas encore versé ses mesures de la journée.
+
+    Les bornes des relevés sont prises sur l'instant brut, puis ramenées à
+    l'heure locale en Python : demander à SQLite `min(date(time, 'localtime'))`
+    l'oblige à convertir les cent soixante-dix mille lignes une à une, soit un
+    demi-quart de seconde pour deux dates.
     """
-    rows = _safe("SELECT min(time) AS premier, max(time) AS dernier FROM wellness_reading")
-    if not rows or rows[0]["dernier"] is None:
-        return {"first_day": None, "last_day": None}
+    releves = _safe("SELECT min(time) AS premier, max(time) AS dernier FROM wellness_reading")
+    autres = _safe(
+        """
+        SELECT min(jour) AS premier, max(jour) AS dernier FROM (
+            SELECT min(local_date) AS jour FROM activity
+            UNION ALL SELECT max(local_date) FROM activity
+            UNION ALL SELECT min(sleep_date) FROM sleep_session
+            UNION ALL SELECT max(sleep_date) FROM sleep_session
+        )
+        """
+    )
+
+    premiers = [_local_day(releves[0]["premier"]) if releves else None]
+    derniers = [_local_day(releves[0]["dernier"]) if releves else None]
+    if autres:
+        premiers.append(_iso_day(autres[0]["premier"]))
+        derniers.append(_iso_day(autres[0]["dernier"]))
+
+    connus_debut = [d for d in premiers if d]
+    connus_fin = [d for d in derniers if d]
     return {
-        "first_day": _local_day(rows[0]["premier"]),
-        "last_day": _local_day(rows[0]["dernier"]),
+        "first_day": min(connus_debut) if connus_debut else None,
+        "last_day": max(connus_fin) if connus_fin else None,
     }
+
+
+def _iso_day(valeur: Any) -> str | None:
+    """Date rendue par une agrégation : SQLite en perd le type déclaré."""
+    if valeur is None:
+        return None
+    texte = str(valeur)[:10]
+    try:
+        dt.date.fromisoformat(texte)
+    except ValueError:
+        return None
+    return texte
 
 
 def _local_day(instant: Any) -> str | None:

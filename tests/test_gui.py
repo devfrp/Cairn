@@ -890,11 +890,29 @@ class TestJourneeDetaillee:
         assert stades[(3 * 60 + 25) // pas] == queries.SLEEP_DEPTH["awake"]
         assert stades[(3 * 60 + 30) // pas] is None
 
-    def test_base_sans_releve_ne_leve_pas(self, base):
+    def test_journee_sans_releve_continu_reste_consultable(self, base):
+        """Une séance et une nuit suffisent à faire une journée à montrer.
+
+        S'en tenir aux relevés continus interdisait d'ouvrir aujourd'hui tant
+        que la montre n'avait pas versé ses mesures de la journée.
+        """
         from cairn.db import execute
         from cairn.gui import queries
 
         execute("DELETE FROM wellness_reading")
+
+        jour = queries.intraday()
+        assert jour.day == "2026-07-01"
+        assert any(v is not None for v in jour.get("speed_kmh"))
+        assert any(v is not None for v in jour.get("sleep_stage"))
+
+    def test_base_vide_ne_leve_pas(self, base):
+        from cairn.db import execute
+        from cairn.gui import queries
+
+        for table in ("wellness_reading", "activity_stream", "sleep_stage",
+                      "sleep_session", "activity"):
+            execute(f"DELETE FROM {table}")
 
         vide = queries.intraday()
         assert vide.day == ""
@@ -1268,3 +1286,41 @@ class TestBaseInjoignable:
         vue.refresh(queries.Health())
 
         assert vue.trend_chart._series == []
+
+
+class TestFenetreDeSynchronisation:
+    """La journée en cours n'était jamais demandée à Garmin.
+
+    La passe incrémentale partait de la veille. Conséquence invisible mais
+    quotidienne : une nuit porte la date du réveil, donc la nuit qui vient de
+    s'achever n'arrivait que le lendemain — la carte « Sommeil » affichait
+    l'avant-dernière nuit toute la journée.
+    """
+
+    def jours(self, mode="incremental", **cursor):
+        from cairn.sync.garmin_sync import _wellness_days
+
+        return _wellness_days(mode, cursor)
+
+    def test_aujourdhui_est_demande(self):
+        assert dt.date.today() in self.jours()
+
+    def test_la_veille_reste_demandee(self):
+        """Elle se complète : la journée d'hier n'était que partielle hier."""
+        assert dt.date.today() - dt.timedelta(days=1) in self.jours()
+
+    def test_pas_de_jour_futur(self):
+        assert max(self.jours()) == dt.date.today()
+
+    def test_fenetre_a_la_longueur_annoncee(self):
+        from cairn.config import get_settings
+
+        # Le jour même s'ajoute à la fenêtre de rattrapage, il ne la rogne pas.
+        assert len(self.jours()) == get_settings().incremental_lookback_days + 1
+
+    def test_le_backfill_ne_repasse_pas_par_aujourdhui(self):
+        """Il descend vers le passé : le présent est l'affaire de l'autre passe."""
+        jours = self.jours(mode="backfill", backfill_done=False)
+
+        assert dt.date.today() not in jours
+        assert max(jours) < dt.date.today()
