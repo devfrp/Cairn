@@ -302,10 +302,16 @@ class ActivitiesPage(QWidget):
         else:
             action = menu.addAction("Écarter des statistiques…")
         detail = menu.addAction("Voir le déroulé")
+        comparer = menu.addAction("Comparer à une autre sortie…")
+        comparer.setEnabled(bool(ligne.get("has_streams")))
 
         choix = menu.exec(self.table.viewport().mapToGlobal(position))
         if choix is detail:
             self._open_detail(index)
+        elif choix is comparer:
+            from cairn.gui.pages.activity_compare import ActivityCompareDialog
+
+            ActivityCompareDialog(ligne["id"], self).exec()
         elif choix is action:
             self._basculer_exclusion(ligne)
 

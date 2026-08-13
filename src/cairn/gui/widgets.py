@@ -952,7 +952,15 @@ class TrendChart(QWidget):
 
     def _paint_band(self, painter, metrics, serie, top, step) -> None:
         values = serie["values"]
+        # Une bande peut porter une seconde courbe, à la même échelle : c'est
+        # ce qui permet de superposer deux sorties. Les bornes se calculent
+        # alors sur les deux, sans quoi l'une sortirait du cadre.
+        seconde = serie.get("values2")
         known = [v for v in values if v is not None]
+        if seconde:
+            known += [v for v in seconde if v is not None]
+        if not known:
+            return
         low, high = min(known), max(known)
         span = (high - low) or 1.0
         height = self.BAND_HEIGHT
@@ -1015,18 +1023,49 @@ class TrendChart(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
-        if self._hover is not None and self._hover < len(values):
-            value = values[self._hover]
-            if value is not None:
-                x = self.LABEL_WIDTH + self._hover * step
-                painter.setBrush(QColor(serie["colour"]))
+        if seconde:
+            chemin = QPainterPath()
+            commence = False
+            for index, value in enumerate(seconde):
+                if value is None:
+                    commence = False
+                    continue
+                x = self.LABEL_WIDTH + index * step
+                if commence:
+                    chemin.lineTo(x, y_of(value))
+                else:
+                    chemin.moveTo(x, y_of(value))
+                    commence = True
+            stylo = QPen(QColor(serie.get("colour2") or theme.MUTED))
+            stylo.setWidthF(2.0)
+            stylo.setStyle(Qt.PenStyle.DashLine)
+            stylo.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(stylo)
+            painter.drawPath(chemin)
+
+        if self._hover is not None:
+            x = self.LABEL_WIDTH + self._hover * step
+            for rang_courbe, (serie_values, couleur) in enumerate((
+                (values, serie["colour"]),
+                (seconde, serie.get("colour2") or theme.MUTED),
+            )):
+                if not serie_values or self._hover >= len(serie_values):
+                    continue
+                value = serie_values[self._hover]
+                if value is None:
+                    continue
+                painter.setBrush(QColor(couleur))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(QRectF(x - 3.5, y_of(value) - 3.5, 7, 7))
+                # La seconde valeur se pose de l'autre côté du curseur :
+                # deux mesures voisines s'y recouvriraient.
                 self._paint_value_tag(
-                    painter, metrics, x, y_of(value), unit(value), serie["colour"]
+                    painter, metrics, x, y_of(value), unit(value), couleur,
+                    a_gauche=bool(rang_courbe),
                 )
 
-    def _paint_value_tag(self, painter, metrics, x, y, texte, couleur) -> None:
+    def _paint_value_tag(self, painter, metrics, x, y, texte, couleur,
+                         a_gauche: bool = False) -> None:
         """Valeur posée contre son propre point, dans sa propre bande.
 
         L'encart unique qui les rassemblait toutes grandissait avec le nombre
@@ -1036,9 +1075,11 @@ class TrendChart(QWidget):
         """
         largeur = metrics.horizontalAdvance(texte) + 12
         hauteur = metrics.height() + 4
-        gauche = x + 10
+        gauche = x - largeur - 10 if a_gauche else x + 10
         if gauche + largeur > self.width() - 2:
             gauche = x - largeur - 10
+        if gauche < 2:
+            gauche = x + 10
 
         painter.setPen(theme.qcolor(couleur, 150))
         painter.setBrush(theme.qcolor(theme.BG, 235))
@@ -1078,7 +1119,7 @@ class TrendChart(QWidget):
         )
 
     def _axis_label(self, valeur: str) -> str:
-        if self._mode == "time":
+        if self._mode in ("time", "plain"):
             return valeur
         try:
             return dt.date.fromisoformat(valeur[:10]).strftime("%d/%m")
@@ -1086,6 +1127,8 @@ class TrendChart(QWidget):
             return valeur
 
     def _cursor_label(self, valeur: str) -> str:
+        if self._mode == "plain":
+            return valeur
         if self._mode == "time":
             # La date est déjà affichée au-dessus du graphe : seule l'heure
             # manque, et on l'écrit comme on la dit.

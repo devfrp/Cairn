@@ -1716,3 +1716,187 @@ class TestSortieEcartee:
         from cairn.gui import queries
 
         queries.set_activity_excluded(999, True, "peu importe")
+
+
+class TestComparaisonDeDeuxSorties:
+    """Savoir si le même parcours passe mieux qu'il y a deux mois."""
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            for identifiant, jour, vitesse in ((1, "01", 5.0), (2, "02", 6.0), (3, "03", 5.0)):
+                conn.execute(
+                    """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                             local_date, sport, sport_family, elapsed_s,
+                                             distance_m, avg_hr, primary_source, name,
+                                             has_streams)
+                       VALUES (?, 1, ?, ?, ?, 'road', 'cycling', 3600, 10000, 150,
+                               'garmin', ?, 1)""",
+                    (identifiant, f"2026-07-{jour}T08:00:00+00:00",
+                     f"2026-07-{jour} 10:00:00", f"2026-07-{jour}",
+                     f"Sortie {identifiant}"),
+                )
+                # Dix kilomètres de relevés, un point tous les dix mètres.
+                for pas in range(0, 1000):
+                    conn.execute(
+                        """INSERT INTO activity_stream (activity_id, time, elapsed_s,
+                                                        hr, altitude_m, speed_mps, distance_m)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (identifiant, f"2026-07-{jour}T08:{pas // 60:02d}:{pas % 60:02d}+00:00",
+                         pas, 140 + identifiant, 100 + pas / 10, vitesse, pas * 10),
+                    )
+            # Une sortie d'un autre sport : elle ne doit pas être proposée.
+            conn.execute(
+                """INSERT INTO activity (id, athlete_id, start_time, start_time_local,
+                                         local_date, sport, sport_family, elapsed_s,
+                                         distance_m, primary_source, name, has_streams)
+                   VALUES (9, 1, '2026-07-04T08:00:00+00:00', '2026-07-04 10:00:00',
+                           '2026-07-04', 'run', 'running', 3600, 10000, 'garmin',
+                           'Course', 1)"""
+            )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_axe_en_distance_et_non_en_temps(self, base):
+        """Dès que l'une fut plus rapide, comparer à temps égal met face à
+        face un sommet et une mi-pente."""
+        from cairn.gui.queries import streams_by_distance
+
+        flux = streams_by_distance(1, points=100)
+
+        assert flux["labels"][0] == "0,0 km"
+        assert flux["labels"][-1].endswith("km")
+        assert flux["total_m"] == pytest.approx(9990, rel=0.01)
+
+    def test_deux_sorties_de_vitesses_differentes_saligent(self, base):
+        """Même parcours, allures différentes : les deux séries ont la même
+        longueur, donc un indice y désigne le même endroit."""
+        from cairn.gui.queries import streams_by_distance
+
+        a = streams_by_distance(1, points=100)
+        b = streams_by_distance(2, points=100)
+
+        assert len(a["labels"]) == len(b["labels"])
+
+    def test_candidats_du_meme_sport(self, base):
+        from cairn.gui.queries import comparable_activities
+
+        candidats = {c["id"] for c in comparable_activities(1)}
+
+        assert candidats == {2, 3}
+
+    def test_candidats_tries_par_ecart_de_distance(self, base):
+        from cairn.db import execute
+        from cairn.gui.queries import comparable_activities
+
+        execute("UPDATE activity SET distance_m = 90000 WHERE id = 2")
+        candidats = comparable_activities(1)
+
+        assert candidats[0]["id"] == 3
+
+    def test_une_sortie_ecartee_reste_comparable(self, base):
+        """Écarter des statistiques n'est pas effacer : la sortie a eu lieu."""
+        from cairn.gui import queries
+
+        queries.set_activity_excluded(3, True, "erreur")
+
+        assert 3 in {c["id"] for c in queries.comparable_activities(1)}
+
+    def test_fenetre_superpose_les_deux(self, qt_app, base):
+        from cairn.gui.pages.activity_compare import ActivityCompareDialog
+
+        fenetre = ActivityCompareDialog(1)
+
+        assert [s["label"] for s in fenetre.chart._series]
+        for serie in fenetre.chart._series:
+            assert any(v is not None for v in serie["values2"])
+
+    def test_avertissement_si_les_parcours_different(self, qt_app, base):
+        from cairn.db import execute
+        from cairn.gui.pages.activity_compare import ActivityCompareDialog
+
+        execute("UPDATE activity SET distance_m = 30000 WHERE id = 2")
+        fenetre = ActivityCompareDialog(1)
+        fenetre.choix.setCurrentIndex(fenetre.choix.findData(2))
+
+        assert not fenetre.avertissement.isHidden()
+        assert "%" in fenetre.avertissement.text()
+
+    def test_sans_candidat_la_fenetre_le_dit(self, qt_app, base):
+        from cairn.db import execute
+        from cairn.gui.pages.activity_compare import ActivityCompareDialog
+
+        execute("DELETE FROM activity WHERE id IN (2, 3)")
+        fenetre = ActivityCompareDialog(1)
+
+        assert fenetre._candidats == []
+
+    def test_sortie_sans_distance_ne_leve_pas(self, base):
+        from cairn.gui.queries import streams_by_distance
+
+        assert streams_by_distance(9) == {"labels": [], "series": {}}
+
+
+class TestSuperpositionDansUneBande:
+    """Deux courbes à la même échelle : c'est ce qui permet de les comparer."""
+
+    def serie(self, values, values2):
+        return {
+            "label": "x", "values": values, "colour": "#e8834a",
+            "unit": lambda v: f"{v:.0f}", "values2": values2, "colour2": "#6b9bd2",
+        }
+
+    def test_les_bornes_couvrent_les_deux_courbes(self, qt_app):
+        """Calculées sur la seule première, la seconde sortirait du cadre."""
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage
+
+        from cairn.gui.widgets import TrendChart
+
+        chart = TrendChart()
+        chart.set_data(["a", "b", "c"], [self.serie([1, 2, 3], [50, 60, 70])],
+                       mode="plain")
+        chart.resize(500, chart.minimumHeight())
+
+        image = QImage(QSize(chart.width(), chart.height()), QImage.Format.Format_ARGB32)
+        image.fill(0)
+        chart.render(image)
+
+        # La courbe basse et la courbe haute doivent toutes deux se peindre
+        # dans la bande, donc y rester bornées.
+        haut = chart.BAND_SPACING
+        bas = haut + chart.BAND_HEIGHT
+        colores = [
+            y for y in range(chart.height()) for x in range(chart.LABEL_WIDTH, chart.width())
+            if image.pixelColor(x, y).name() in ("#e8834a", "#6b9bd2")
+        ]
+        assert colores
+        assert min(colores) >= haut - 2
+        assert max(colores) <= bas + 2
+
+    def test_bande_sans_aucune_valeur_ecartee(self, qt_app):
+        from cairn.gui.widgets import TrendChart
+
+        chart = TrendChart()
+        chart.set_data(["a", "b"], [self.serie([None, None], [None, None])], mode="plain")
+
+        assert chart._series == []
+
+    def test_etiquettes_rendues_telles_quelles(self, qt_app):
+        from cairn.gui.widgets import TrendChart
+
+        chart = TrendChart()
+        chart.set_data(["12,4 km", "13,0 km"], [self.serie([1, 2], [3, 4])], mode="plain")
+
+        assert chart._axis_label("12,4 km") == "12,4 km"
+        assert chart._cursor_label("12,4 km") == "12,4 km"

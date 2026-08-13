@@ -1060,6 +1060,83 @@ def acknowledge_flag(kind: str) -> int:
         return 0
 
 
+def streams_by_distance(activity_id: int, points: int = 300) -> dict[str, Any]:
+    """Relevés d'une sortie rééchantillonnés le long du parcours.
+
+    Comparer deux sorties sur le temps écoulé n'a pas de sens dès que l'une
+    fut plus rapide : au bout d'une heure, l'une est au sommet et l'autre à
+    mi-pente. C'est la distance parcourue qui aligne deux passages sur le
+    même terrain.
+    """
+    bornes = _safe(
+        """
+        SELECT max(distance_m) AS totale, count(*) AS n
+          FROM activity_stream WHERE activity_id = ? AND distance_m IS NOT NULL
+        """,
+        (activity_id,),
+    )
+    if not bornes or not bornes[0]["totale"]:
+        return {"labels": [], "series": {}}
+
+    totale = float(bornes[0]["totale"])
+    pas = totale / points
+    rows = _safe(
+        """
+        SELECT CAST(distance_m / ? AS INTEGER) AS case_,
+               avg(hr) AS hr, avg(altitude_m) AS altitude_m, avg(speed_mps) AS speed_mps
+          FROM activity_stream
+         WHERE activity_id = ? AND distance_m IS NOT NULL
+         GROUP BY case_ ORDER BY case_
+        """,
+        (pas, activity_id),
+    )
+
+    par_case = {int(r["case_"]): r for r in rows}
+    cases = range(points + 1)
+    return {
+        "total_m": totale,
+        "labels": [f"{i * pas / 1000:.1f}".replace(".", ",") + " km" for i in cases],
+        "series": {
+            "hr": [par_case[i]["hr"] if i in par_case else None for i in cases],
+            "altitude_m": [
+                par_case[i]["altitude_m"] if i in par_case else None for i in cases
+            ],
+            "speed_kmh": [
+                par_case[i]["speed_mps"] * 3.6
+                if i in par_case and par_case[i]["speed_mps"] is not None
+                else None
+                for i in cases
+            ],
+        },
+    }
+
+
+def comparable_activities(activity_id: int, limit: int = 40) -> list[dict[str, Any]]:
+    """Sorties du même sport, les plus proches en distance d'abord.
+
+    Comparer deux sorties n'a de sens qu'à parcours voisin : une heure de
+    home-trainer et une sortie de soixante kilomètres n'ont rien à se dire.
+    Le tri par écart de distance met les vraies comparaisons en tête, sans
+    interdire les autres.
+    """
+    return _safe(
+        """
+        WITH reference AS (SELECT sport, distance_m FROM activity WHERE id = ?)
+        SELECT a.id, a.name, a.start_time_local, a.distance_m, a.elapsed_s,
+               a.avg_hr, coalesce(a.training_load, a.trimp) AS load,
+               abs(coalesce(a.distance_m, 0) - coalesce(
+                   (SELECT distance_m FROM reference), 0)) AS ecart
+          FROM activity a
+         WHERE a.id <> ?
+           AND a.sport = (SELECT sport FROM reference)
+           AND a.has_streams = 1
+         ORDER BY ecart, a.start_time DESC
+         LIMIT ?
+        """,
+        (activity_id, activity_id, limit),
+    )
+
+
 def period_totals(days: int | None = None) -> dict[str, Any]:
     """Cumuls sur une période, et l'écart avec la période précédente.
 
