@@ -262,12 +262,13 @@ class DashboardPage(QWidget):
         )
 
         # Bandeau de signaux, en tête : c'est ce qui doit sauter aux yeux.
-        self.signals = QLabel("")
-        self.signals.setObjectName("CardHint")
-        self.signals.setWordWrap(True)
-        self.signals.setTextFormat(Qt.TextFormat.RichText)
+        # Une ligne par signal, chacune avec son bouton : un bandeau qu'on ne
+        # peut pas faire taire finit par ne plus être lu.
         self.signals_card = Card()
-        self.signals_card.layout().addWidget(self.signals)
+        self.signals_rows = QVBoxLayout()
+        self.signals_rows.setContentsMargins(0, 0, 0, 0)
+        self.signals_rows.setSpacing(4)
+        self.signals_card.layout().addLayout(self.signals_rows)
         self.signals_card.hide()
         layout.addWidget(self.signals_card)
 
@@ -886,30 +887,75 @@ class DashboardPage(QWidget):
             self.acwr.set_value(f"{fitness.acwr:.2f}", hint, colour)
 
     def _fill_signals(self, flags: list) -> None:
+        while self.signals_rows.count():
+            element = self.signals_rows.takeAt(0)
+            if element.widget():
+                element.widget().deleteLater()
+
         colours = {"alert": theme.DANGER, "warn": theme.WARN, "info": theme.MUTED}
-        lignes = [
-            f"<span style='color:{colours.get(f['severity'], theme.MUTED)}'>●</span> "
-            f"{f['message']}"
-            for f in flags[:4]
-        ]
+        lignes = 0
+        for signal in flags[:4]:
+            self.signals_rows.addWidget(
+                self._ligne_signal(
+                    signal["message"],
+                    colours.get(signal["severity"], theme.MUTED),
+                    signal["kind"],
+                )
+            )
+            lignes += 1
 
         # Une chaîne usée ne se découvre pas en consultant la page Analyse,
         # mais le jour où elle saute : l'alerte a sa place ici.
         for piece in queries.worn_components()[:3]:
             usure = piece["wear_pct"]
-            couleur = theme.DANGER if usure >= 100 else theme.WARN
             nom = piece["label"] or PIECES_COURTES.get(piece["kind"], piece["kind"])
-            lignes.append(
-                f"<span style='color:{couleur}'>●</span> "
-                f"{nom} de {piece['gear_name']} : {usure:.0f} % de l'intervalle "
-                f"d'entretien."
+            self.signals_rows.addWidget(
+                self._ligne_signal(
+                    f"{nom} de {piece['gear_name']} : {usure:.0f} % de "
+                    "l'intervalle d'entretien.",
+                    theme.DANGER if usure >= 100 else theme.WARN,
+                    None,
+                )
             )
+            lignes += 1
 
-        if not lignes:
-            self.signals_card.hide()
-            return
-        self.signals.setText("<br>".join(lignes))
-        self.signals_card.show()
+        self.signals_card.setVisible(bool(lignes))
+
+    def _ligne_signal(self, message: str, couleur: str, kind: str | None) -> QWidget:
+        """Un signal, et de quoi l'éteindre quand il est de nature à l'être.
+
+        L'usure du matériel n'a pas de bouton : elle ne s'éteint pas d'un clic
+        mais en changeant la pièce, et la faire taire ici masquerait le
+        problème au lieu de le régler.
+        """
+        holder = QWidget()
+        ligne = QHBoxLayout(holder)
+        ligne.setContentsMargins(0, 0, 0, 0)
+        ligne.setSpacing(8)
+
+        pastille = QLabel("●")
+        pastille.setStyleSheet(f"color: {couleur};")
+        ligne.addWidget(pastille)
+
+        texte = QLabel(message)
+        texte.setObjectName("CardHint")
+        texte.setWordWrap(True)
+        ligne.addWidget(texte, 1)
+
+        if kind:
+            eteindre = QPushButton("Acquitter")
+            eteindre.setCursor(Qt.CursorShape.PointingHandCursor)
+            eteindre.setToolTip(
+                "Écarte définitivement les signaux de cette nature. Le recalcul "
+                "des métriques ne les régénérera pas."
+            )
+            eteindre.clicked.connect(lambda _=False, k=kind: self._acquitter(k))
+            ligne.addWidget(eteindre)
+        return holder
+
+    def _acquitter(self, kind: str) -> None:
+        queries.acknowledge_flag(kind)
+        self.refresh(queries.probe())
 
     def _show_unavailable(self, health: queries.Health) -> None:
         self.signals_card.hide()

@@ -75,12 +75,32 @@ class AnalysisPage(QWidget):
         self.summary.setObjectName("PageHint")
         layout.addWidget(row(self.period, self.summary))
 
+        self.totals = self._card(
+            "Depuis le 1er janvier",
+            "Ce que l'année cumule, et l'écart avec la même période l'an "
+            "dernier.",
+        )
+        self.totals_body = QLabel("—")
+        self.totals_body.setObjectName("CardValue")
+        self.totals_detail = QLabel("")
+        self.totals_detail.setObjectName("CardHint")
+        self.totals_detail.setWordWrap(True)
+        self.totals.layout().addWidget(self.totals_body)
+        self.totals.layout().addWidget(self.totals_detail)
+        layout.addWidget(self.totals)
+
         self.zones = self._card(
             "Temps par zone de fréquence cardiaque",
             "Calculé depuis les fichiers d'activité, seconde par seconde.",
         )
         self.zones_chart = BarBreakdown()
         self.zones.layout().addWidget(self.zones_chart)
+        # Les bornes qui servent au calcul, jamais montrées jusqu'ici : sans
+        # elles, impossible de vérifier que le TRIMP repose sur les bonnes.
+        self.zones_bounds = QLabel("")
+        self.zones_bounds.setObjectName("CardHint")
+        self.zones_bounds.setWordWrap(True)
+        self.zones.layout().addWidget(self.zones_bounds)
         layout.addWidget(self.zones)
 
         self.sports = self._card("Volume par discipline", "")
@@ -155,7 +175,9 @@ class AnalysisPage(QWidget):
             return
 
         days = self.period.currentData() or 30
+        self._fill_totals(queries.period_totals())
         self._fill_zones(queries.zone_distribution(days))
+        self._fill_zone_bounds(queries.hr_zones())
         self._fill_sports(queries.sport_breakdown(days))
         self._fill_weekly(queries.weekly_load(days))
         # L'année entière, quelle que soit la période choisie : c'est
@@ -271,6 +293,44 @@ class AnalysisPage(QWidget):
 
     def _reload_gear(self) -> None:
         self._fill_gear()
+
+    def _fill_totals(self, totals: dict) -> None:
+        if not totals or not totals.get("sessions"):
+            self.totals_body.setText("—")
+            self.totals_detail.setText("Aucune sortie enregistrée cette année.")
+            return
+
+        self.totals_body.setText(
+            f"{format_distance(totals['distance_m'])} · "
+            f"{format_elevation(totals['elevation_m'])} · "
+            f"{format_duration(totals['duration_s'])}"
+        )
+
+        morceaux = [
+            pluriel(totals["sessions"], "sortie"),
+            f"charge cumulée {totals['load']:.0f}",
+        ]
+        precedent = totals.get("distance_precedente_m") or 0
+        if precedent:
+            ecart = (totals["distance_m"] - precedent) / precedent * 100
+            morceaux.append(f"{ecart:+.0f} % de distance vs l'an dernier")
+        else:
+            # Comparer à une année sans données donnerait un « +100 % » qui ne
+            # veut rien dire : l'historique commence là, voilà tout.
+            morceaux.append("pas d'historique sur la période équivalente")
+        self.totals_detail.setText(" · ".join(morceaux))
+
+    def _fill_zone_bounds(self, zones: list[dict]) -> None:
+        if not zones:
+            self.zones_bounds.setText("")
+            return
+        bornes = " · ".join(
+            f"Z{z['zone_index']} {z['min_bpm']}–{z['max_bpm']}" for z in zones
+        )
+        origine = zones[0]
+        self.zones_bounds.setText(
+            f"Vos zones ({origine['source']}, FC max {origine['hr_max']}) : {bornes} bpm"
+        )
 
     def _fill_zones(self, rows: list[dict]) -> None:
         if not rows:

@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +43,7 @@ from cairn.gui.widgets import (
     format_elevation,
     format_relative_day,
 )
+from cairn.text import pluriel
 
 ZONES = {
     1: "Zone 1 · récup",
@@ -77,6 +80,12 @@ class ActivityDetailDialog(QDialog):
         if zones:
             layout.addWidget(self._zones(zones))
 
+        tours = queries.activity_laps(activity_id)
+        if len(tours) > 1:
+            # Un tour unique n'apprend rien : c'est la sortie elle-même,
+            # déjà résumée par les cartes du haut.
+            layout.addWidget(self._tours(tours, detail))
+
         flux = queries.activity_streams(activity_id)
         layout.addWidget(self._trace_et_courbes(flux), 1)
 
@@ -100,6 +109,8 @@ class ActivityDetailDialog(QDialog):
 
         sport = SPORT_LABELS.get(detail.get("sport"), detail.get("sport") or "—")
         morceaux = [sport, format_relative_day(detail.get("start_time_local"))]
+        if detail.get("is_race"):
+            morceaux.append("course")
         if detail.get("gear_name"):
             morceaux.append(detail["gear_name"])
         if detail.get("sources"):
@@ -121,6 +132,10 @@ class ActivityDetailDialog(QDialog):
             ("FC max", self._bpm(detail.get("max_hr"))),
             ("Charge", self._entier(detail.get("trimp") or detail.get("training_load"))),
         ]
+        # Le ressenti n'apparaît que s'il a été noté : une carte vide sur
+        # toutes les sorties sauf quatorze n'apporte rien.
+        if detail.get("perceived_exertion"):
+            valeurs.append(("Ressenti", f"{detail['perceived_exertion']}/10"))
 
         holder = QWidget()
         grille = QGridLayout(holder)
@@ -169,6 +184,65 @@ class ActivityDetailDialog(QDialog):
         ])
         carte.layout().addWidget(barres)
         return carte
+
+    # -- tours -----------------------------------------------------------
+
+    def _tours(self, tours: list[dict[str, Any]], detail: dict[str, Any]) -> QWidget:
+        """Tableau des tours : ce qui distingue un fractionné d'une sortie continue."""
+        carte = Card()
+        titre = QLabel(f"Tours · {pluriel(len(tours), 'tour')}")
+        titre.setObjectName("SectionTitle")
+        carte.layout().addWidget(titre)
+
+        table = QTableWidget(len(tours), 6)
+        table.setHorizontalHeaderLabels(
+            ["#", "Durée", "Distance", "Allure", "FC moy.", "FC max"]
+        )
+        table.verticalHeader().hide()
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        # Sans cela, la dernière colonne s'étire sur toute la largeur restante
+        # et « FC max » se retrouve à un empan de sa valeur.
+        table.horizontalHeader().setStretchLastSection(False)
+
+        # À pied, une allure en minutes par kilomètre ; à vélo, une vitesse.
+        # Afficher 12 km/h à un coureur ne lui dit rien de son entraînement.
+        a_pied = (detail.get("sport_family") or "") == "running"
+        for ligne, tour in enumerate(tours):
+            valeurs = (
+                str(tour["lap_index"]),
+                format_duration(tour["elapsed_s"]),
+                format_distance(tour["distance_m"]),
+                self._allure(tour["avg_speed_mps"], a_pied),
+                self._bpm(tour["avg_hr"]),
+                self._bpm(tour["max_hr"]),
+            )
+            for colonne, valeur in enumerate(valeurs):
+                cellule = QTableWidgetItem(valeur)
+                if colonne:
+                    cellule.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
+                table.setItem(ligne, colonne, cellule)
+
+        table.resizeColumnsToContents()
+        # Une hauteur bornée : soixante-dix-huit tours pousseraient tout le
+        # reste de la fenêtre hors de vue.
+        hauteur = table.horizontalHeader().height() + min(len(tours), 8) * 28 + 4
+        table.setMinimumHeight(hauteur)
+        table.setMaximumHeight(hauteur)
+        carte.layout().addWidget(table)
+        return carte
+
+    @staticmethod
+    def _allure(mps: Any, a_pied: bool) -> str:
+        if not mps:
+            return "—"
+        if not a_pied:
+            return f"{mps * 3.6:.1f}".replace(".", ",") + " km/h"
+        secondes = 1000 / mps
+        return f"{int(secondes // 60)}:{int(secondes % 60):02d} /km"
 
     # -- courbes ---------------------------------------------------------
 

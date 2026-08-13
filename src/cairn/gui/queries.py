@@ -730,7 +730,7 @@ def recent_activities(limit: int = 60) -> list[dict[str, Any]]:
         SELECT a.id, a.start_time_local, a.sport, a.name, a.distance_m, a.elevation_gain_m,
                a.elapsed_s, a.avg_hr, a.max_hr,
                coalesce(a.training_load, a.trimp) AS load,
-               a.has_streams, g.name AS gear_name,
+               a.has_streams, a.is_race, g.name AS gear_name,
                group_concat(DISTINCT s.source) AS sources
           FROM activity a
           LEFT JOIN gear g ON g.id = a.gear_id
@@ -995,6 +995,106 @@ def _elapsed_label(seconds: float | None) -> str:
         return "—"
     total = int(seconds)
     return f"{total // 3600}:{total % 3600 // 60:02d}"
+
+
+def activity_laps(activity_id: int) -> list[dict[str, Any]]:
+    """Tours d'une sortie, dans l'ordre.
+
+    Quatre cent quatre-vingt-sept tours dorment en base sur cent dix-neuf
+    sorties : c'est ce qui distingue un fractionné d'une sortie continue, et
+    la fenêtre de détail n'en montrait rien.
+    """
+    return _safe(
+        """
+        SELECT lap_index, elapsed_s, moving_s, distance_m, elevation_gain_m,
+               avg_hr, max_hr, avg_power_w, avg_cadence, avg_speed_mps
+          FROM activity_lap WHERE activity_id = ? ORDER BY lap_index
+        """,
+        (activity_id,),
+    )
+
+
+def acknowledge_flag(kind: str) -> int:
+    """Éteint tous les signaux d'une même nature.
+
+    Un signal qu'on ne peut pas faire taire finit par ne plus être lu. Le
+    recalcul des métriques efface les signaux non acquittés et les régénère :
+    acquitter est donc le seul moyen d'en être débarrassé durablement, et
+    c'est bien ainsi que la table a été conçue — l'interface manquait.
+
+    Par nature et non par jour : la charge trop élevée produit un signal par
+    jour, et il en resterait soixante-dix à éteindre un par un.
+    """
+    from cairn.db import execute
+
+    try:
+        return execute(
+            "UPDATE marts_flag SET acknowledged = 1 WHERE kind = ? AND acknowledged = 0",
+            (kind,),
+        )
+    except (sqlite3.Error, OSError):
+        return 0
+
+
+def period_totals(days: int | None = None) -> dict[str, Any]:
+    """Cumuls sur une période, et l'écart avec la période précédente.
+
+    `days` à None couvre l'année civile en cours. L'écart compte autant que le
+    total : « 828 km » ne dit pas si l'on est en avance ou en retard.
+    """
+    if days:
+        debut = f"date('now', 'localtime', '-{int(days)} days')"
+        debut_precedent = f"date('now', 'localtime', '-{2 * int(days)} days')"
+    else:
+        debut = "date('now', 'localtime', 'start of year')"
+        # Même nombre de jours écoulés, un an plus tôt : comparer une année
+        # entamée à une année pleine n'apprendrait rien.
+        debut_precedent = "date('now', 'localtime', 'start of year', '-1 year')"
+
+    fin_precedente = (
+        f"date('now', 'localtime', '-{int(days)} days')" if days
+        else "date('now', 'localtime', '-1 year')"
+    )
+
+    rows = _safe(
+        f"""
+        SELECT
+          (SELECT count(*) FROM activity WHERE local_date >= {debut}) AS sessions,
+          (SELECT coalesce(sum(distance_m), 0) FROM activity
+            WHERE local_date >= {debut}) AS distance_m,
+          (SELECT coalesce(sum(elevation_gain_m), 0) FROM activity
+            WHERE local_date >= {debut}) AS elevation_m,
+          (SELECT coalesce(sum(elapsed_s), 0) FROM activity
+            WHERE local_date >= {debut}) AS duration_s,
+          (SELECT coalesce(sum(coalesce(training_load, trimp)), 0) FROM activity
+            WHERE local_date >= {debut}) AS load,
+          (SELECT coalesce(sum(distance_m), 0) FROM activity
+            WHERE local_date >= {debut_precedent}
+              AND local_date < {fin_precedente}) AS distance_precedente_m,
+          (SELECT coalesce(sum(elapsed_s), 0) FROM activity
+            WHERE local_date >= {debut_precedent}
+              AND local_date < {fin_precedente}) AS duration_precedente_s
+        """  # noqa: S608 — bornes construites depuis un entier, jamais une saisie
+    )
+    return dict(rows[0]) if rows else {}
+
+
+def hr_zones() -> list[dict[str, Any]]:
+    """Zones de fréquence cardiaque en vigueur, avec leurs bornes.
+
+    Cairn calcule le TRIMP de chaque sortie avec ces bornes sans jamais les
+    montrer : impossible de vérifier qu'elles correspondent à la réalité.
+    """
+    return _safe(
+        """
+        SELECT z.zone_index, z.min_bpm, z.max_bpm, z.label,
+               s.hr_max, s.hr_rest, s.lthr, s.valid_from, s.source
+          FROM hr_zone z
+          JOIN hr_zone_set s ON s.id = z.zone_set_id
+         WHERE s.valid_from = (SELECT max(valid_from) FROM hr_zone_set)
+         ORDER BY z.zone_index
+        """
+    )
 
 
 def gear_wear() -> list[dict[str, Any]]:
