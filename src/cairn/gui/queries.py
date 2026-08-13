@@ -259,6 +259,26 @@ def load(days: int = 30) -> Load:
     return result
 
 
+def _plafond_vitesse_sql() -> str:
+    """Traduit la table des vitesses impossibles en expression SQL.
+
+    Générée depuis la constante Python plutôt que recopiée : deux tables de
+    seuils finiraient par diverger, et c'est celle qu'on ne relit pas qui
+    ferait foi. Les familles absentes n'ont pas de plafond, d'où la borne
+    inatteignable en repli.
+    """
+    from cairn.metrics.formulas import VITESSE_IMPOSSIBLE_KMH
+
+    cas = " ".join(
+        f"WHEN '{famille}' THEN {plafond:.1f}"
+        for famille, plafond in sorted(VITESSE_IMPOSSIBLE_KMH.items())
+    )
+    return f"CASE a.sport_family {cas} ELSE 1e9 END"
+
+
+PLAFOND_VITESSE_SQL = _plafond_vitesse_sql()
+
+
 @dataclass
 class DailyMetrics:
     """Toutes les mesures quotidiennes disponibles, sur un calendrier commun.
@@ -334,7 +354,10 @@ def daily_metrics(days: int = 30) -> DailyMetrics:
                (SELECT sum(a.calories)
                   FROM activity a WHERE a.local_date = calendar.day) AS sport_calories,
                (SELECT max(a.max_speed_mps) * 3.6
-                  FROM activity a WHERE a.local_date = calendar.day) AS max_speed_kmh,
+                  FROM activity a
+                 WHERE a.local_date = calendar.day
+                   AND a.max_speed_mps * 3.6 <= """ + PLAFOND_VITESSE_SQL + """
+               ) AS max_speed_kmh,
                -- Puissance pondérée par la durée : la moyenne simple donnerait
                -- autant de poids à dix minutes de home-trainer qu'à trois heures.
                (SELECT sum(a.avg_power_w * a.elapsed_s) / sum(a.elapsed_s)

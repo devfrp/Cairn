@@ -24,6 +24,26 @@ BASELINE_DAYS = 60
 # un écart-type sur trois nuits ne veut rien dire.
 MIN_BASELINE_SAMPLES = 14
 
+# Vitesse au-delà de laquelle un relevé ne peut pas être vrai, par famille de
+# sport, en km/h. Un décrochage GPS d'une seconde suffit à inscrire une pointe
+# absurde — 93 km/h sur une course à pied, relevée telle quelle par la montre —
+# et cette seule valeur écrase l'échelle d'un graphe entier.
+#
+# Les seuils sont volontairement hauts : on n'écarte que l'impossible, jamais
+# l'inhabituel. Le record du monde du 100 m culmine vers 44 km/h ; un cycliste
+# en descente dépasse les 100. Les familles absentes de la table n'ont pas de
+# plafond, faute d'une limite dont on soit sûr — sur l'eau, une remontée en
+# bateau produit des pointes légitimes.
+VITESSE_IMPOSSIBLE_KMH = {"running": 45.0, "cycling": 120.0}
+
+
+def vitesse_plausible(sport_family: str, kmh: float | None) -> bool:
+    """Le relevé peut-il correspondre à un déplacement réel ?"""
+    if kmh is None:
+        return False
+    plafond = VITESSE_IMPOSSIBLE_KMH.get(sport_family)
+    return plafond is None or kmh <= plafond
+
 
 def ewma(values: list[float], days: int, seed: float | None = None) -> list[float]:
     """Moyenne mobile exponentielle, une valeur par jour.

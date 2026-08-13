@@ -1209,3 +1209,62 @@ class TestAccordDuPluriel:
         ]
 
         assert fautifs == []
+
+
+class TestBaseInjoignable:
+    """Le chemin le moins emprunté, et celui qui plantait.
+
+    `_show_unavailable` vidait des courbes qui n'existaient plus : la page
+    levait une AttributeError au lieu d'afficher son message, et l'erreur ne
+    se voyait qu'avec une base absente — jamais en usage normal.
+    """
+
+    def page(self, qt_app, monkeypatch):
+        from cairn.gui import prefs, queries
+        from cairn.gui.pages.dashboard import DashboardPage
+
+        monkeypatch.setattr(prefs, "load_view", lambda k, d="": "")
+        monkeypatch.setattr(prefs, "save_view", lambda k, v: None)
+        monkeypatch.setattr(queries, "probe", lambda: queries.Health())
+        return DashboardPage()
+
+    def test_base_absente_affiche_un_message(self, qt_app, monkeypatch):
+        from cairn.gui import queries
+
+        vue = self.page(qt_app, monkeypatch)
+        vue.refresh(queries.Health(reachable=False))
+
+        assert not vue.empty_notice.isHidden()
+        assert "injoignable" in vue.empty_notice.text()
+
+    def test_schema_absent_renvoie_aux_reglages(self, qt_app, monkeypatch):
+        from cairn.gui import queries
+
+        vue = self.page(qt_app, monkeypatch)
+        vue.refresh(queries.Health(reachable=True, migrated=False))
+
+        assert "Réglages" in vue.empty_notice.text()
+
+    def test_toutes_les_cartes_sont_vidées(self, qt_app, monkeypatch):
+        """Des chiffres laissés en place feraient croire à des données à jour."""
+        from cairn.gui import queries
+
+        vue = self.page(qt_app, monkeypatch)
+        vue.steps.set_value("18 434", "hier")
+        vue.refresh(queries.Health())
+
+        assert vue.steps.value.text() == "—"
+        assert vue.signals_card.isHidden()
+
+    def test_le_graphe_est_vidé(self, qt_app, monkeypatch):
+        """Une courbe laissée à l'écran donnerait à croire que la base répond."""
+        from cairn.gui import queries
+
+        vue = self.page(qt_app, monkeypatch)
+        vue.trend_chart.set_data(
+            ["2026-08-01", "2026-08-02"],
+            [{"label": "x", "values": [1, 2], "colour": "#fff", "unit": str}],
+        )
+        vue.refresh(queries.Health())
+
+        assert vue.trend_chart._series == []

@@ -399,3 +399,46 @@ class TestZonesAnterieuresAuJeuConnu:
         execute("DELETE FROM hr_zone_set")
         with connection() as conn:
             assert zone_set_for(conn, 1, dt.date(2026, 1, 1)) is None
+
+
+class TestVitessePlausible:
+    """Un décrochage GPS d'une seconde écrase l'échelle d'un graphe entier.
+
+    Une course à pied relevée à 93 km/h existe bel et bien dans les données :
+    la montre l'a enregistrée, et rien en aval ne la mettait en doute.
+    """
+
+    def test_course_a_pied_impossible_ecartee(self):
+        from cairn.metrics.formulas import vitesse_plausible
+
+        assert not vitesse_plausible("running", 93.4)
+
+    def test_sprint_de_haut_niveau_accepte(self):
+        """Le seuil n'écarte que l'impossible, jamais l'inhabituel."""
+        from cairn.metrics.formulas import vitesse_plausible
+
+        assert vitesse_plausible("running", 43.0)
+
+    def test_descente_a_velo_acceptee(self):
+        from cairn.metrics.formulas import vitesse_plausible
+
+        assert vitesse_plausible("cycling", 95.0)
+
+    def test_famille_sans_plafond(self):
+        """Sur l'eau, une remontée en bateau produit des pointes légitimes."""
+        from cairn.metrics.formulas import vitesse_plausible
+
+        assert vitesse_plausible("water", 60.0)
+
+    def test_absence_de_mesure(self):
+        from cairn.metrics.formulas import vitesse_plausible
+
+        assert not vitesse_plausible("running", None)
+
+    def test_le_sql_derive_de_la_table_python(self):
+        """Deux tables de seuils finiraient par diverger."""
+        from cairn.gui.queries import PLAFOND_VITESSE_SQL
+        from cairn.metrics.formulas import VITESSE_IMPOSSIBLE_KMH
+
+        for famille, plafond in VITESSE_IMPOSSIBLE_KMH.items():
+            assert f"WHEN '{famille}' THEN {plafond:.1f}" in PLAFOND_VITESSE_SQL
