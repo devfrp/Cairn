@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cairn.gui import queries, theme
+from cairn.gui import prefs, queries, theme
 from cairn.gui.pages.activities import SPORT_LABELS
 from cairn.gui.widgets import (
     BarBreakdown,
@@ -180,6 +180,7 @@ class AnalysisPage(QWidget):
         self._fill_zone_bounds(queries.hr_zones())
         self._fill_sports(queries.sport_breakdown(days))
         self._fill_weekly(queries.weekly_load(days))
+        self._appliquer_objectif()
         # L'année entière, quelle que soit la période choisie : c'est
         # justement la vue d'ensemble que les autres cartes ne donnent pas.
         annee = queries.daily_metrics(365)
@@ -369,6 +370,18 @@ class AnalysisPage(QWidget):
         self.summary.setText(
             f"{pluriel(sessions, 'sortie')} · {format_duration(duration)} au total"
         )
+
+    def _appliquer_objectif(self) -> None:
+        """Trait de cible sur la charge hebdomadaire, si une cible existe.
+
+        Seule la charge se trace ici : le graphe ne montre qu'elle, et poser
+        un objectif de distance sur un axe de charge n'aurait aucun sens.
+        """
+        mesure, cible = prefs.load_objective()
+        if mesure != "load" or not cible:
+            self.weekly_chart.set_target(None)
+            return
+        self.weekly_chart.set_target(cible, f"objectif {cible:.0f}")
 
     def _fill_weekly(self, rows: list[dict]) -> None:
         # Au-delà d'une vingtaine de colonnes, les libellés deviennent

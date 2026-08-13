@@ -9,8 +9,10 @@ from PySide6.QtCore import QProcess, QProcessEnvironment, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from cairn.gui import prefs, queries, theme
-from cairn.gui.widgets import Card, SectionHeader, StatusPill, field_row
+from cairn.gui.widgets import Card, SectionHeader, StatusPill, field_row, row
 from cairn.gui.workers import GarminLoginWorker, Worker
 from cairn.text import pluriel
 
@@ -156,6 +158,7 @@ class SettingsPage(QWidget):
 
         layout.addWidget(self._build_database())
         layout.addWidget(self._build_behaviour())
+        layout.addWidget(self._build_objective())
         layout.addWidget(self._build_garmin())
         layout.addWidget(self._build_strava())
         layout.addWidget(self._build_summary())
@@ -195,6 +198,99 @@ class SettingsPage(QWidget):
         detail.setWordWrap(True)
         card.layout().addWidget(detail)
         return card
+
+    # -- objectif --------------------------------------------------------
+
+    # Facteur de conversion entre l'unité affichée et celle stockée, qui est
+    # celle des requêtes : points de charge, secondes, mètres.
+    OBJECTIFS = {
+        "load": ("Charge d'entraînement", "", 1.0, 0),
+        "duration": ("Temps d'entraînement", " h", 3600.0, 1),
+        "distance": ("Distance", " km", 1000.0, 0),
+    }
+
+    def _build_objective(self) -> Card:
+        card = Card()
+        title = QLabel("Objectif hebdomadaire")
+        title.setObjectName("SectionTitle")
+        card.layout().addWidget(title)
+
+        detail = QLabel(
+            "Une cible par semaine, tracée sur la charge hebdomadaire et "
+            "suivie sur le tableau de bord. Laissez à zéro pour ne pas en "
+            "fixer : Cairn ne sait pas ce que vous préparez et n'en inventera "
+            "pas."
+        )
+        detail.setObjectName("CardHint")
+        detail.setWordWrap(True)
+        card.layout().addWidget(detail)
+
+        self.objective_kind = QComboBox()
+        for cle, (libelle, _, _, _) in self.OBJECTIFS.items():
+            self.objective_kind.addItem(libelle, cle)
+        self.objective_kind.currentIndexChanged.connect(self._objective_kind_changed)
+
+        self.objective_value = QDoubleSpinBox()
+        self.objective_value.setRange(0, 100000)
+        self.objective_value.setSpecialValueText("aucun objectif")
+        self.objective_value.valueChanged.connect(self._save_objective)
+
+        self.btn_suggest = QPushButton("Proposer d'après mon historique")
+        self.btn_suggest.setToolTip(
+            "Reprend la médiane de vos douze dernières semaines complètes. "
+            "Une médiane, pour qu'une semaine de coupure ne tire pas la cible "
+            "vers le bas."
+        )
+        self.btn_suggest.clicked.connect(self._suggest_objective)
+
+        card.layout().addWidget(
+            row(field_row("Mesure", self.objective_kind),
+                field_row("Cible par semaine", self.objective_value),
+                self.btn_suggest)
+        )
+        return card
+
+    def _objective_kind_changed(self) -> None:
+        """L'unité suit la mesure, et la valeur enregistrée avec elle."""
+        cle = self.objective_kind.currentData()
+        _, suffixe, _, decimales = self.OBJECTIFS[cle]
+        self.objective_value.setSuffix(suffixe)
+        self.objective_value.setDecimals(decimales)
+        self._charger_objectif_courant()
+        self._save_objective()
+
+    def _charger_objectif_courant(self) -> None:
+        cle = self.objective_kind.currentData()
+        _, _, facteur, _ = self.OBJECTIFS[cle]
+        try:
+            brut = float(prefs.load_view(f"objectif_{cle}", "0") or 0)
+        except ValueError:
+            brut = 0.0
+        self.objective_value.blockSignals(True)
+        self.objective_value.setValue(brut / facteur)
+        self.objective_value.blockSignals(False)
+
+    def _save_objective(self) -> None:
+        cle = self.objective_kind.currentData()
+        _, _, facteur, _ = self.OBJECTIFS[cle]
+        prefs.save_view(f"objectif_{cle}", str(self.objective_value.value() * facteur))
+        # La mesure choisie est retenue à part : c'est elle que le tableau de
+        # bord et le graphe hebdomadaire iront lire.
+        prefs.save_view("objectif_mesure", cle)
+        self.settings_changed.emit()
+
+    def _suggest_objective(self) -> None:
+        cle = self.objective_kind.currentData()
+        _, _, facteur, _ = self.OBJECTIFS[cle]
+        propose = queries.suggested_weekly_target(cle)
+        if not propose:
+            QMessageBox.information(
+                self, "Pas assez d'historique",
+                "Il faut au moins une semaine complète enregistrée pour "
+                "proposer une cible.",
+            )
+            return
+        self.objective_value.setValue(propose / facteur)
 
     # -- base ----------------------------------------------------------
 
@@ -507,6 +603,15 @@ class SettingsPage(QWidget):
         self.auto_sync.blockSignals(True)
         self.auto_sync.setChecked(prefs.load_option("sync_au_demarrage"))
         self.auto_sync.blockSignals(False)
+
+        self.objective_kind.blockSignals(True)
+        mesure = prefs.load_view("objectif_mesure", "load")
+        self.objective_kind.setCurrentIndex(max(0, self.objective_kind.findData(mesure)))
+        self.objective_kind.blockSignals(False)
+        _, suffixe, _, decimales = self.OBJECTIFS[self.objective_kind.currentData()]
+        self.objective_value.setSuffix(suffixe)
+        self.objective_value.setDecimals(decimales)
+        self._charger_objectif_courant()
         self.dsn.setText(values.get("db_path", ""))
         self.secret.setText(values.get("secret_key", ""))
         self.strava_id.setText(values.get("strava_client_id", ""))

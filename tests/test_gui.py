@@ -1900,3 +1900,166 @@ class TestSuperpositionDansUneBande:
 
         assert chart._axis_label("12,4 km") == "12,4 km"
         assert chart._cursor_label("12,4 km") == "12,4 km"
+
+
+class TestObjectifHebdomadaire:
+    """Une cible que l'utilisateur fixe, jamais que Cairn invente.
+
+    L'application ne sait pas ce qui se prépare : elle propose la médiane des
+    semaines passées et laisse trancher.
+    """
+
+    @pytest.fixture
+    def base(self, tmp_path, monkeypatch):
+        from cairn import db, migrate
+        from cairn.config import reset_settings
+
+        monkeypatch.setenv("CAIRN_DB_PATH", str(tmp_path / "cairn.db"))
+        monkeypatch.setenv("CAIRN_SECRET_KEY", "x" * 44)
+        reset_settings()
+        db.close_pool()
+        migrate.upgrade()
+        with db.connection() as conn:
+            conn.execute("INSERT INTO athlete (id, display_name) VALUES (1, 't')")
+            # Cinq semaines complètes de charges connues, plus la semaine en
+            # cours : la médiane doit ignorer cette dernière.
+            lundi = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
+            for rang, charge in enumerate((100, 200, 300, 400, 500), start=1):
+                jour = lundi - dt.timedelta(weeks=rang)
+                conn.execute(
+                    """INSERT INTO activity (athlete_id, start_time, start_time_local,
+                                             local_date, sport, sport_family, elapsed_s,
+                                             distance_m, training_load, primary_source, name)
+                       VALUES (1, ?, ?, ?, 'road', 'cycling', 3600, 10000, ?,
+                               'garmin', 'Sortie')""",
+                    (f"{jour}T08:00:00+00:00", f"{jour} 10:00:00", jour, charge),
+                )
+            conn.execute(
+                """INSERT INTO activity (athlete_id, start_time, start_time_local,
+                                         local_date, sport, sport_family, elapsed_s,
+                                         distance_m, training_load, primary_source, name)
+                   VALUES (1, ?, ?, ?, 'road', 'cycling', 1800, 5000, 50,
+                           'garmin', 'Sortie de la semaine')""",
+                (f"{lundi}T08:00:00+00:00", f"{lundi} 10:00:00", lundi),
+            )
+        yield
+        db.close_pool()
+        reset_settings()
+
+    def test_mediane_des_semaines_completes(self, base):
+        from cairn.gui.queries import suggested_weekly_target
+
+        assert suggested_weekly_target("load") == 300
+
+    def test_la_semaine_en_cours_est_exclue(self, base):
+        """Entamée, elle tirerait la cible sous l'habitude."""
+        from cairn.gui.queries import weekly_history
+
+        semaines = {r["week"] for r in weekly_history(12)}
+        courante = dt.date.today().strftime("%Y-%W")
+
+        assert courante not in semaines
+
+    def test_mediane_plutot_que_moyenne(self, base):
+        """Une semaine exceptionnelle ne doit pas déplacer la cible."""
+        from cairn.db import execute
+        from cairn.gui.queries import suggested_weekly_target
+
+        execute("UPDATE activity SET training_load = 5000 WHERE training_load = 500")
+
+        assert suggested_weekly_target("load") == 300
+
+    def test_avancement_de_la_semaine(self, base):
+        from cairn.gui.queries import current_week_progress
+
+        avancement = current_week_progress("load")
+
+        assert avancement["value"] == 50
+        assert 0 <= avancement["days_left"] <= 6
+
+    def test_mesure_inconnue_sans_suggestion(self, base):
+        from cairn.gui.queries import suggested_weekly_target
+
+        assert suggested_weekly_target("inexistant") is None
+
+    def test_base_vide_sans_suggestion(self, base):
+        from cairn.db import execute
+        from cairn.gui.queries import suggested_weekly_target
+
+        execute("DELETE FROM activity")
+
+        assert suggested_weekly_target("load") is None
+
+    def test_objectif_absent_par_defaut(self, qt_app, monkeypatch, tmp_path):
+        from cairn.gui import prefs
+
+        monkeypatch.setattr(prefs, "app_directory", lambda: tmp_path)
+        (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
+
+        assert prefs.load_objective() == ("load", 0.0)
+
+    def test_objectif_relu(self, qt_app, monkeypatch, tmp_path):
+        from cairn.gui import prefs
+
+        monkeypatch.setattr(prefs, "app_directory", lambda: tmp_path)
+        (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
+        prefs.save_view("objectif_mesure", "duration")
+        prefs.save_view("objectif_duration", "18000")
+
+        assert prefs.load_objective() == ("duration", 18000.0)
+
+    def test_valeur_abimee_ne_leve_pas(self, qt_app, monkeypatch, tmp_path):
+        from cairn.gui import prefs
+
+        monkeypatch.setattr(prefs, "app_directory", lambda: tmp_path)
+        (tmp_path / prefs.PORTABLE_FILENAME).write_text("[General]\n")
+        prefs.save_view("objectif_load", "pas un nombre")
+
+        assert prefs.load_objective() == ("load", 0.0)
+
+    def test_carte_masquee_sans_objectif(self, qt_app, monkeypatch):
+        from cairn.gui import prefs, queries
+        from cairn.gui.pages.dashboard import DashboardPage
+
+        monkeypatch.setattr(prefs, "load_view", lambda k, d="": d)
+        monkeypatch.setattr(prefs, "load_objective", lambda: ("load", 0.0))
+        monkeypatch.setattr(queries, "probe", lambda: queries.Health())
+
+        vue = DashboardPage()
+        vue._fill_objective()
+
+        assert vue.objective_card.isHidden()
+
+    def test_lechelle_absorbe_lobjectif(self, qt_app):
+        """Au-dessus de toutes les colonnes, le trait sortirait du cadre.
+
+        On le vérifie par son effet : la plus haute colonne doit rapetisser
+        quand l'objectif la dépasse, puisque l'échelle s'étend jusqu'à lui.
+        """
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage
+
+        from cairn.gui.widgets import ColumnChart
+
+        def hauteur_coloree(cible):
+            graphe = ColumnChart()
+            graphe.set_values([("S1", 100.0), ("S2", 200.0)])
+            graphe.set_target(cible)
+            graphe.resize(400, 140)
+            image = QImage(QSize(400, 140), QImage.Format.Format_ARGB32)
+            image.fill(0)
+            graphe.render(image)
+            return sum(
+                1 for y in range(140) for x in range(400)
+                if image.pixelColor(x, y).name() == "#e8834a"
+            )
+
+        assert hauteur_coloree(900.0) < hauteur_coloree(None)
+
+    def test_objectif_nul_ne_trace_rien(self, qt_app):
+        from cairn.gui.widgets import ColumnChart
+
+        graphe = ColumnChart()
+        graphe.set_target(0)
+
+        assert graphe._target is None

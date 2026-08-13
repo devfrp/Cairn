@@ -179,6 +179,22 @@ def save_option(key: str, value: bool) -> None:
     store.sync()
 
 
+# Unités de stockage d'un objectif hebdomadaire, par mesure : points de
+# charge, secondes, mètres — celles que rendent les requêtes.
+OBJECTIF_UNITES = {"load": "", "duration": " h", "distance": " km"}
+
+
+def load_objective() -> tuple[str, float]:
+    """Mesure visée et cible hebdomadaire, ou zéro si aucune n'est fixée."""
+    mesure = load_view("objectif_mesure", "load")
+    if mesure not in OBJECTIF_UNITES:
+        mesure = "load"
+    try:
+        return mesure, float(load_view(f"objectif_{mesure}", "0") or 0)
+    except ValueError:
+        return mesure, 0.0
+
+
 def describe_location() -> str:
     if is_portable():
         return f"Mode portable — {portable_file()}"

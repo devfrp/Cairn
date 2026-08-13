@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -297,6 +298,19 @@ class DashboardPage(QWidget):
         ):
             day_grid.addWidget(card, 0, index)
         layout.addLayout(day_grid)
+
+        # --- objectif de la semaine ---
+        self.objective_card = Card()
+        self.objective_text = QLabel("")
+        self.objective_text.setObjectName("CardHint")
+        self.objective_text.setWordWrap(True)
+        self.objective_bar = QProgressBar()
+        self.objective_bar.setRange(0, 100)
+        self.objective_bar.setTextVisible(False)
+        self.objective_card.layout().addWidget(self.objective_text)
+        self.objective_card.layout().addWidget(self.objective_bar)
+        self.objective_card.hide()
+        layout.addWidget(self.objective_card)
 
         # --- tendances ---
         layout.addWidget(self._build_trends())
@@ -716,6 +730,7 @@ class DashboardPage(QWidget):
 
         self._fill_recovery(recovery)
         self._fill_load(load)
+        self._fill_objective()
         self._fill_fitness(queries.fitness())
         self._fill_signals(queries.active_flags())
 
@@ -821,6 +836,48 @@ class DashboardPage(QWidget):
             if recovery.readiness is not None:
                 hint += f" · readiness {recovery.readiness}"
             self.battery.set_value(str(recovery.body_battery), hint)
+
+    LIBELLES_OBJECTIF = {
+        "load": ("Charge", lambda v: f"{v:.0f}"),
+        "duration": ("Temps", format_duration),
+        "distance": ("Distance", format_distance),
+    }
+
+    def _fill_objective(self) -> None:
+        """Où en est la semaine par rapport à la cible fixée.
+
+        Rien ne s'affiche sans objectif : une barre à zéro pour cent
+        reprocherait à l'utilisateur de ne pas avoir répondu à une question
+        qu'on ne lui a pas posée.
+        """
+        mesure, cible = prefs.load_objective()
+        if not cible:
+            self.objective_card.hide()
+            return
+
+        libelle, mise_en_forme = self.LIBELLES_OBJECTIF[mesure]
+        avancement = queries.current_week_progress(mesure)
+        fait = avancement["value"]
+        part = fait / cible * 100
+        restant = max(0.0, cible - fait)
+        jours = avancement["days_left"]
+
+        self.objective_bar.setValue(int(min(100, part)))
+        detail = (
+            f"{libelle} de la semaine : {mise_en_forme(fait)} sur "
+            f"{mise_en_forme(cible)} — {part:.0f} %"
+        )
+        if restant <= 0:
+            detail += " · objectif atteint"
+        elif jours:
+            detail += (
+                f" · reste {mise_en_forme(restant)} en "
+                f"{pluriel(jours, 'jour')}"
+            )
+        else:
+            detail += f" · il manque {mise_en_forme(restant)}"
+        self.objective_text.setText(detail)
+        self.objective_card.show()
 
     def _fill_load(self, load: queries.Load) -> None:
         trend = load.trend_pct

@@ -1111,6 +1111,73 @@ def streams_by_distance(activity_id: int, points: int = 300) -> dict[str, Any]:
     }
 
 
+def weekly_history(weeks: int = 12) -> list[dict[str, Any]]:
+    """Semaines complètes récentes, avec leurs trois cumuls.
+
+    La semaine en cours est exclue : entamée, elle tirerait toute médiane
+    vers le bas et proposerait un objectif inférieur à l'habitude.
+    """
+    return _safe(
+        """
+        SELECT strftime('%Y-%W', local_date) AS week,
+               coalesce(sum(coalesce(training_load, trimp)), 0) AS load,
+               coalesce(sum(elapsed_s), 0) AS duration_s,
+               coalesce(sum(distance_m), 0) AS distance_m
+          FROM activity_kept
+         WHERE local_date < date('now', 'localtime', 'weekday 1', '-7 days')
+           AND local_date >= date('now', 'localtime', 'weekday 1',
+                                  '-' || (7 * (? + 1)) || ' days')
+         GROUP BY week ORDER BY week
+        """,
+        (weeks,),
+    )
+
+
+def suggested_weekly_target(kind: str = "load", weeks: int = 12) -> float | None:
+    """Médiane des semaines récentes, comme point de départ d'un objectif.
+
+    Une médiane et non une moyenne : une semaine de coupure ou une sortie
+    exceptionnelle ne doivent pas déplacer la cible. Et c'est une proposition,
+    pas une prescription — Cairn n'a aucune idée de ce que vous préparez.
+    """
+    colonne = {"load": "load", "duration": "duration_s", "distance": "distance_m"}.get(kind)
+    if colonne is None:
+        return None
+
+    valeurs = sorted(float(r[colonne]) for r in weekly_history(weeks) if r[colonne])
+    if not valeurs:
+        return None
+    milieu = len(valeurs) // 2
+    if len(valeurs) % 2:
+        return valeurs[milieu]
+    return (valeurs[milieu - 1] + valeurs[milieu]) / 2
+
+
+def current_week_progress(kind: str = "load") -> dict[str, Any]:
+    """Où en est la semaine en cours, du lundi à maintenant."""
+    colonne = {
+        "load": "coalesce(sum(coalesce(training_load, trimp)), 0)",
+        "duration": "coalesce(sum(elapsed_s), 0)",
+        "distance": "coalesce(sum(distance_m), 0)",
+    }.get(kind)
+    if colonne is None:
+        return {"value": 0.0, "days_left": 0}
+
+    rows = _safe(
+        f"""
+        SELECT {colonne} AS valeur
+          FROM activity_kept
+         WHERE local_date >= date('now', 'localtime', 'weekday 1', '-7 days')
+        """  # noqa: S608 — colonne choisie dans une table fermée, jamais saisie
+    )
+    valeur = float(rows[0]["valeur"]) if rows else 0.0
+    # Lundi vaut zéro : il reste six jours le lundi, zéro le dimanche.
+    reste = _safe(
+        "SELECT 6 - CAST(strftime('%w', 'now', 'localtime', '-1 day') AS INTEGER) AS n"
+    )
+    return {"value": valeur, "days_left": max(0, reste[0]["n"] if reste else 0)}
+
+
 def comparable_activities(activity_id: int, limit: int = 40) -> list[dict[str, Any]]:
     """Sorties du même sport, les plus proches en distance d'abord.
 

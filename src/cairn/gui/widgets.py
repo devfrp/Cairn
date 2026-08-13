@@ -334,6 +334,8 @@ class ColumnChart(QWidget):
         super().__init__(parent)
         self._values: list[tuple[str, float]] = []
         self._colour = theme.ACCENT
+        self._target: float | None = None
+        self._target_label = ""
         self.setMinimumHeight(120)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
@@ -341,6 +343,13 @@ class ColumnChart(QWidget):
         self._values = list(values)
         if colour:
             self._colour = colour
+        self.update()
+
+    def set_target(self, value: float | None, label: str = "") -> None:
+        """Trait d'objectif, horizontal. Sans lui, une colonne ne se compare
+        qu'aux voisines, jamais à ce qu'on visait."""
+        self._target = value if value and value > 0 else None
+        self._target_label = label
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 — API Qt
@@ -358,6 +367,10 @@ class ColumnChart(QWidget):
         top_margin = 6
         plot_height = self.height() - label_height - top_margin
         largest = max((v for _, v in self._values), default=0) or 1
+        # L'objectif entre dans l'échelle : au-dessus de toutes les colonnes,
+        # son trait se peindrait hors du cadre.
+        if self._target:
+            largest = max(largest, self._target)
         slot = self.width() / len(self._values)
         bar_width = min(38.0, slot * 0.62)
 
@@ -381,6 +394,29 @@ class ColumnChart(QWidget):
                 Qt.AlignmentFlag.AlignCenter,
                 label,
             )
+
+        if self._target:
+            y = top_margin + plot_height - plot_height * (self._target / largest)
+            stylo = QPen(QColor(theme.OK))
+            stylo.setWidthF(1.4)
+            stylo.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(stylo)
+            painter.drawLine(0, int(y), self.width(), int(y))
+            if self._target_label:
+                metrics = QFontMetrics(painter.font())
+                largeur = metrics.horizontalAdvance(self._target_label)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(theme.BG))
+                painter.drawRect(
+                    QRectF(self.width() - largeur - 12, y - metrics.height() / 2 - 1,
+                           largeur + 12, metrics.height() + 2)
+                )
+                painter.setPen(QColor(theme.OK))
+                painter.drawText(
+                    int(self.width() - largeur - 6),
+                    int(y + metrics.ascent() / 2 - 1),
+                    self._target_label,
+                )
 
         painter.end()
 
