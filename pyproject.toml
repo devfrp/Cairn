@@ -1,6 +1,6 @@
 [project]
 name = "cairn"
-version = "0.2.0"
+version = "0.2.1"
 description = "Agrégation auto-hébergée des données Garmin et Strava"
 requires-python = ">=3.12"
 dependencies = [
@@ -28,11 +28,13 @@ dependencies = [
 # Qt n'est requis que par l'application de bureau. Le conteneur serveur s'en
 # passe : ce sont plus de cent mégaoctets qui n'y serviraient à rien.
 gui = [
-    "PySide6-Essentials>=6.8",
+    # Plafonné sous 6.12 : à partir de là, QtWebEngine quitte PySide6-Addons
+    # pour un paquet à part, et les builds partaient sans lui.
+    "PySide6-Essentials>=6.8,<6.12",
     # QtWebEngine, pour la fenêtre de connexion Garmin. Garmin refuse les
     # clients HTTP depuis mars 2026 : seul un vrai moteur de rendu passe.
     # C'est lourd — un Chromium — mais c'est le prix de la connexion.
-    "PySide6-Addons>=6.8",
+    "PySide6-Addons>=6.8,<6.12",
 ]
 dev = [
     "pytest>=8.3",
