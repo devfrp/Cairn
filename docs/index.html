@@ -1,24 +1,24 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cairn — vos données Garmin et Strava, réunies chez vous</title>
-<meta name="description" content="Application de bureau qui réunit vos données Garmin et Strava dans un fichier qui vous appartient, et rapproche récupération et charge d'entraînement.">
+<title>Cairn : vos données Garmin et Strava, réunies chez vous</title>
+<meta name="description" content="Application de bureau qui réunit vos données Garmin et Strava dans un fichier qui vous appartient, et rapproche récupération et charge d’entraînement.">
 <link rel="icon" href="assets/cairn.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/style.css">
 <link rel="alternate" hreflang="en" href="en/">
 <link rel="alternate" hreflang="fr" href="./">
 </head>
 <body>
-
-<header>
-  <div class="wrap">
-    <a class="brand" href="./">
-      <img src="assets/cairn.svg" alt="">
+<a class="skip" href="#top">Aller au contenu</a>
+<header class="bar">
+  <div class="container bar-inner">
+    <a class="brand" href="./" aria-label="Cairn, accueil">
+      <img src="assets/cairn.svg" alt="" width="32" height="32">
       <span>Cairn</span>
     </a>
-    <nav>
+    <nav class="bar-nav" aria-label="Navigation">
       <a href="#telechargements">Télécharger</a>
       <a href="https://github.com/devfrp/Cairn">GitHub</a>
       <a href="en/" hreflang="en">EN</a>
@@ -26,212 +26,147 @@
   </div>
 </header>
 
-<main>
+<main id="top">
+  <section class="hero">
+    <div class="container hero-grid">
+      <div class="hero-text">
+        <h1>Vos données Garmin et Strava, réunies chez vous.</h1>
+        <p class="lead">Cairn les rapproche sur votre machine, dans un fichier qui vous appartient.</p>
+        <div class="actions">
+          <a class="btn btn--primary" href="#telechargements">Télécharger l’application</a>
+          <a class="btn" href="https://github.com/devfrp/Cairn">Code source</a>
+        </div>
+      </div>
+      <figure class="sheet sheet--hero">
+        <div class="sheet-head"><p class="sheet-title">Une grosse semaine</p><p class="sheet-tag">exemple</p></div>
+        <div class="table-scroll">
+        <table class="week">
+          <thead><tr><th>Jour</th><th class="num">Sommeil</th><th class="num">VFC</th><th class="num">FC repos</th><th>Sortie</th><th class="num">Durée</th><th class="num">D+</th></tr></thead>
+          <tbody>
+            <tr><td>Lun</td><td class="num">7:40</td><td class="num">62</td><td class="num">48</td><td>route</td><td class="num">1:30</td><td class="num">450</td></tr>
+            <tr><td>Mar</td><td class="num">7:10</td><td class="num">60</td><td class="num">49</td><td class="rest">repos</td><td class="num"></td><td class="num"></td></tr>
+            <tr><td>Mer</td><td class="num">6:50</td><td class="num">55</td><td class="num">51</td><td>enduro</td><td class="num">2:00</td><td class="num">1200</td></tr>
+            <tr><td>Jeu</td><td class="num">6:30</td><td class="num">51</td><td class="num">53</td><td>enduro</td><td class="num">2:30</td><td class="num">1400</td></tr>
+            <tr class="flag"><td>Ven</td><td class="num">6:20</td><td class="num">47</td><td class="num">55</td><td>route</td><td class="num">3:00</td><td class="num">900</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <figcaption><span>Nuits par Garmin, sorties par Strava, sur la même ligne.</span><span class="sheet-note">Exemple, pas vos données</span></figcaption>
+      </figure>
+    </div>
+  </section>
 
-<div class="hero wrap">
-  <h1>Vos données Garmin et Strava, réunies chez vous.</h1>
-  <p class="lede">
-    Garmin sait comment vous avez dormi. Strava sait ce que vous avez roulé.
-    Ni l'un ni l'autre ne rapproche les deux, faute de se parler. Cairn s'en
-    charge, sur votre machine, dans un fichier qui vous appartient.
-  </p>
-  <div class="actions">
-    <a class="btn btn-primary" href="#telechargements">Télécharger l'application</a>
-    <a class="btn btn-ghost" href="https://github.com/devfrp/Cairn">Code source</a>
-  </div>
-</div>
-
-<section>
-  <div class="wrap">
-    <h2>Le problème</h2>
-    <p>
-      Vous enchaînez une grosse semaine. Depuis trois nuits, votre variabilité
-      cardiaque baisse et votre fréquence de repos monte : Garmin le voit.
-      Vous avez accumulé le dénivelé en enduro et trois heures de route :
-      Strava le voit. Mais personne ne rapproche les deux, et c'est
-      justement là qu'une surcharge se repère avant qu'elle ne coûte cher.
-    </p>
-    <p>
-      Cairn réunit les deux sources, comprend qu'une sortie remontée des deux
-      côtés n'en fait qu'une, et place la récupération de la nuit en face de
-      l'entraînement du jour.
-    </p>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <h2>Ce que ça fait</h2>
-    <div class="cards">
-      <div class="card">
-        <h3>Synchronisation nocturne</h3>
-        <p>
-          Une passe chaque nuit. Les réponses brutes des deux services et vos
-          fichiers <code>.fit</code> d'origine sont conservés : rien ne se
-          perd, et tout peut être recalculé plus tard.
-        </p>
+  <section class="sec">
+    <div class="container">
+      <div class="head">
+        <h2>Pourquoi Cairn ?</h2>
+        <p class="lead">Garmin sait comment vous avez dormi. Strava sait ce que vous avez roulé. Ni l’un ni l’autre ne rapproche les deux, faute de se parler.</p>
       </div>
-      <div class="card">
-        <h3>Plus de doublons</h3>
-        <p>
-          Une sortie enregistrée sur la montre remonte à la fois dans Garmin
-          et dans Strava. Cairn n'en garde qu'une, avec les capteurs du
-          premier et le matériel du second.
-        </p>
-      </div>
-      <div class="card">
-        <h3>Récupération et charge</h3>
-        <p>
-          Sommeil, variabilité cardiaque et fréquence de repos rapprochés des
-          sorties du même jour — le croisement qu'aucun des deux services ne
-          sait faire.
-        </p>
-      </div>
-      <div class="card">
-        <h3>Résumé hebdomadaire</h3>
-        <p>
-          Un modèle installé avec l'application met votre semaine en mots,
-          hors ligne. Il ne calcule rien : les chiffres viennent tous de vos
-          données, et s'il en invente un, il est écarté.
-        </p>
-      </div>
-      <div class="card">
-        <h3>Application de bureau</h3>
-        <p>
-          Une fenêtre pour relier vos comptes, lancer une synchronisation et
-          voir l'essentiel. Rien à installer à côté : posez-la sur une clé
-          USB, elle emporte ses réglages et ses données.
-        </p>
-      </div>
-      <div class="card">
-        <h3>Analyse seconde par seconde</h3>
-        <p>
-          Vos fichiers <code>.fit</code> sont décodés point par point : temps
-          réellement passé dans chaque zone de fréquence cardiaque, dérive
-          cardiaque, lecture fine d'une sortie.
-        </p>
+      <div class="sees">
+        <div class="see"><p class="see-who">Garmin le voit</p><p>Vous enchaînez une grosse semaine. Depuis trois nuits, votre variabilité cardiaque baisse et votre fréquence de repos monte.</p></div>
+        <div class="see"><p class="see-who">Strava le voit</p><p>Vous avez accumulé le dénivelé en enduro et trois heures de route.</p></div>
+        <div class="see see--cairn"><p class="see-who">Cairn les rapproche</p><p>Mais personne ne rapproche les deux, et c’est justement là qu’une surcharge se repère avant qu’elle ne coûte cher. Cairn réunit les deux sources, comprend qu’une sortie remontée des deux côtés n’en fait qu’une, et place la récupération de la nuit en face de l’entraînement du jour.</p></div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section>
-  <div class="wrap">
-    <h2>Où en est le projet</h2>
-    <p>
-      Cairn est en construction et n'a pas encore de version stable. Voici
-      où en sont les choses, sans embellir.
-    </p>
-    <ul class="status">
-      <li><span class="tag tag-ok">Fait</span> <span>Synchronisation Garmin et Strava, fusion des doublons, reprise après coupure</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Décodage des fichiers <code>.fit</code>, zones de fréquence cardiaque, charge d'entraînement</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Analyse intégrée : zones d'intensité, volume par discipline, charge hebdomadaire</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Charge chronique et aiguë, comparaison à vos propres moyennes, détection de surcharge</span></li>
-      <li><span class="tag tag-ok">Fait</span> <span>Résumé hebdomadaire rédigé par un modèle local, envoi sur Discord</span></li>
-      <li><span class="tag tag-wip">À venir</span> <span>Avertissement automatique dès qu'un seuil de fatigue est franchi</span></li>
-    </ul>
-  </div>
-</section>
+  <section class="sec sec--l">
+    <div class="container">
+      <div class="head">
+        <h2>Que fait-il ?</h2>
+      </div>
+      <ul class="does">
+        <li><h3>Synchronisation nocturne</h3><p>Une passe chaque nuit. Les réponses brutes des deux services et vos fichiers <code>.fit</code> d’origine sont conservés : rien ne se perd, et tout peut être recalculé plus tard.</p></li>
+        <li><h3>Plus de doublons</h3><p>Une sortie enregistrée sur la montre remonte à la fois dans Garmin et dans Strava. Cairn n’en garde qu’une, avec les capteurs du premier et le matériel du second.</p></li>
+        <li><h3>Récupération et charge</h3><p>Sommeil, variabilité cardiaque et fréquence de repos rapprochés des sorties du même jour : le croisement qu’aucun des deux services ne sait faire.</p></li>
+        <li><h3>Résumé hebdomadaire</h3><p>Un modèle installé avec l’application met votre semaine en mots, hors ligne. Il ne calcule rien : les chiffres viennent tous de vos données, et s’il en invente un, il est écarté.</p></li>
+        <li><h3>Application de bureau</h3><p>Une fenêtre pour relier vos comptes, lancer une synchronisation et voir l’essentiel. Rien à installer à côté : posez-la sur une clé USB, elle emporte ses réglages et ses données.</p></li>
+        <li><h3>Analyse seconde par seconde</h3><p>Vos fichiers <code>.fit</code> sont décodés point par point : temps réellement passé dans chaque zone de fréquence cardiaque, dérive cardiaque, lecture fine d’une sortie.</p></li>
+      </ul>
+    </div>
+  </section>
 
-<section>
-  <div class="wrap">
-    <h2>Premier démarrage</h2>
-    <p>
-      Rien à préparer : l'application emporte sa base de données et son
-      modèle. Au premier lancement, la page Réglages choisit où ranger vos
-      données, crée la clé qui chiffrera vos accès, prépare la base et relie
-      vos comptes. Garmin n'ouvrant pas son API aux particuliers, Cairn
-      ouvre une session et n'en garde que le jeton, chiffré : votre mot de
-      passe n'est jamais enregistré.
-    </p>
-    <p>
-      Tout tient dans un fichier, <code>cairn.db</code>. Le sauvegarder
-      suffit à sauvegarder Cairn ; le copier ailleurs suffit à déménager.
-    </p>
-  </div>
-</section>
-
-<section id="telechargements">
-  <div class="wrap">
-    <h2>Télécharger l'application</h2>
-    <p>
-      Une application autonome : ni Python, ni base de données, ni modèle à
-      installer à côté. Vous la lancez, elle fonctionne.
-    </p>
-
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr><th>Plateforme</th><th>Fichier</th><th>Notes</th></tr>
-        </thead>
+  <section class="sec sec--l">
+    <div class="container status-wrap">
+      <div class="head head--side">
+        <h2>Où en est le projet ?</h2>
+        <p class="lead">Cairn est en construction et n’a pas encore de version stable. Voici où en sont les choses, sans embellir.</p>
+      </div>
+      <table class="status">
+        <thead><tr><th>État</th><th>Quoi</th></tr></thead>
         <tbody>
-          <tr>
-            <td>Linux x86-64</td>
-            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-x86_64.AppImage">Cairn-x86_64.AppImage</a></td>
-            <td class="note"><code>chmod +x</code> puis exécuter</td>
-          </tr>
-          <tr>
-            <td>Windows x86-64</td>
-            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-windows-x86_64.zip">Cairn-windows-x86_64.zip</a></td>
-            <td class="note">Décompresser, puis lancer <code>Cairn.exe</code></td>
-          </tr>
-          <tr>
-            <td>macOS Apple Silicon</td>
-            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-arm64.dmg">Cairn-macos-arm64.dmg</a></td>
-            <td class="note">Non notarisé : <code>xattr -dr com.apple.quarantine</code></td>
-          </tr>
-          <tr>
-            <td>macOS Intel</td>
-            <td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-x86_64.dmg">Cairn-macos-x86_64.dmg</a></td>
-            <td class="note">Non notarisé : <code>xattr -dr com.apple.quarantine</code></td>
-          </tr>
+          <tr><td class="st">fait</td><td>Synchronisation Garmin et Strava, fusion des doublons, reprise après coupure</td></tr>
+          <tr><td class="st">fait</td><td>Décodage des fichiers <code>.fit</code>, zones de fréquence cardiaque, charge d’entraînement</td></tr>
+          <tr><td class="st">fait</td><td>Analyse intégrée : zones d’intensité, volume par discipline, charge hebdomadaire</td></tr>
+          <tr><td class="st">fait</td><td>Charge chronique et aiguë, comparaison à vos propres moyennes, détection de surcharge</td></tr>
+          <tr><td class="st">fait</td><td>Résumé hebdomadaire rédigé par un modèle local, envoi sur Discord</td></tr>
+          <tr class="next"><td class="st">à venir</td><td>Avertissement automatique dès qu’un seuil de fatigue est franchi</td></tr>
         </tbody>
       </table>
     </div>
+  </section>
 
-    <div class="callout">
-      <p>
-        Chaque version emporte le modèle <code>qwen3:0.6b</code>, ce qui
-        explique ses quelque 800 Mo. C'est le prix d'un résumé qui tourne
-        hors ligne, sans rien installer et sans qu'une ligne de vos données
-        ne quitte la machine. Si vous faites déjà tourner Ollama ailleurs,
-        indiquez son adresse dans les réglages : Cairn s'en servira.
-      </p>
-      <p style="margin-top:12px">
-        Chaque fichier est publié avec son empreinte SHA-256. Faute de
-        signature payante, Windows et macOS afficheront un avertissement au
-        premier lancement.
-      </p>
+  <section class="sec sec--l">
+    <div class="container">
+      <div class="head">
+        <h2>Et au premier lancement ?</h2>
+      </div>
+      <div class="first">
+        <p>Rien à préparer : l’application emporte sa base de données et son modèle. Au premier lancement, la page Réglages choisit où ranger vos données, crée la clé qui chiffrera vos accès, prépare la base et relie vos comptes. Garmin n’ouvrant pas son API aux particuliers, Cairn ouvre une session et n’en garde que le jeton, chiffré : votre mot de passe n’est jamais enregistré.</p>
+        <div class="file">
+          <p class="file-name"><code>cairn.db</code></p>
+          <p>Tout tient dans un fichier, <code>cairn.db</code>. Le sauvegarder suffit à sauvegarder Cairn ; le copier ailleurs suffit à déménager.</p>
+        </div>
+      </div>
     </div>
+  </section>
 
-    <p style="margin-top:28px">Sous Linux et macOS, en une commande :</p>
-<pre><code>curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh</code></pre>
-  </div>
-</section>
+  <section class="sec sec--l" id="telechargements">
+    <div class="container">
+      <div class="head">
+        <h2>Où le télécharger ?</h2>
+        <p class="lead">Une application autonome : ni Python, ni base de données, ni modèle à installer à côté. Vous la lancez, elle fonctionne.</p>
+      </div>
+      <div class="table-scroll sheet sheet--plain">
+        <table class="dl">
+          <thead><tr><th>Plateforme</th><th>Fichier</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Linux x86-64</td><td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-x86_64.AppImage">Cairn-x86_64.AppImage</a></td><td class="note"><code>chmod +x</code> puis exécuter</td></tr>
+            <tr><td>Windows x86-64</td><td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-windows-x86_64.zip">Cairn-windows-x86_64.zip</a></td><td class="note">Décompresser, puis lancer <code>Cairn.exe</code></td></tr>
+            <tr><td>macOS Apple Silicon</td><td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-arm64.dmg">Cairn-macos-arm64.dmg</a></td><td class="note">Non notarisé : <code>xattr -dr com.apple.quarantine</code></td></tr>
+            <tr><td>macOS Intel</td><td><a href="https://github.com/devfrp/Cairn/releases/latest/download/Cairn-macos-x86_64.dmg">Cairn-macos-x86_64.dmg</a></td><td class="note">Non notarisé : <code>xattr -dr com.apple.quarantine</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="after-dl">
+        <div class="well">
+          <p>Chaque version emporte le modèle <code>qwen3:0.6b</code>, ce qui explique ses quelque 800 Mo. C’est le prix d’un résumé qui tourne hors ligne, sans rien installer et sans qu’une ligne de vos données ne quitte la machine. Si vous faites déjà tourner Ollama ailleurs, indiquez son adresse dans les réglages : Cairn s’en servira.</p>
+          <p>Chaque fichier est publié avec son empreinte SHA-256. Faute de signature payante, Windows et macOS afficheront un avertissement au premier lancement.</p>
+        </div>
+        <div class="oneline">
+          <p>Sous Linux et macOS, en une commande :</p>
+          <pre><code>curl -fsSL https://devfrp.github.io/Cairn/get.sh | sh</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
 
-<section>
-  <div class="wrap">
-    <h2>Vos données restent chez vous</h2>
-    <p>
-      Cairn ne s'adresse qu'à Garmin et à Strava, et seulement pour
-      récupérer ce qui vous appartient. Aucun service tiers, aucune
-      télémétrie, aucun compte à créer. Vos données et vos fichiers
-      d'activité restent sur votre machine — et cette page ne charge ni
-      police ni script venus d'ailleurs.
-    </p>
-  </div>
-</section>
-
+  <section class="sec sec--l">
+    <div class="container yours">
+      <h2>Où vont mes données ?</h2>
+      <p>Cairn ne s’adresse qu’à Garmin et à Strava, et seulement pour récupérer ce qui vous appartient. Aucun service tiers, aucune télémétrie, aucun compte à créer. Vos données et vos fichiers d’activité restent sur votre machine, et cette page ne charge ni police ni script venus d’ailleurs.</p>
+    </div>
+  </section>
 </main>
 
-<footer>
-  <div class="wrap">
-    <p>
-      <a href="https://github.com/devfrp/Cairn">Code source</a> ·
-      <a href="en/" hreflang="en">English version</a>
-    </p>
+<footer class="foot">
+  <div class="container foot-inner">
+    <p class="foot-brand">Cairn</p>
+    <ul class="links">
+      <li><a href="https://github.com/devfrp/Cairn">Code source</a></li>
+      <li><a href="en/" hreflang="en">English version</a></li>
+    </ul>
   </div>
 </footer>
-
 </body>
 </html>

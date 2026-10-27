@@ -1,0 +1,32 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "site",
+  "shape": "Conversational FAQ",
+  "theme": "almanac",
+  "axes": "mid/grotesk-sans/chromatic-magenta",
+  "hero": "Stage",
+  "nav": "edge-aligned",
+  "footer": "colophon block",
+  "imagery": "product built (sample sheet)",
+  "photos": [],
+  "entry": "none",
+  "sections": [
+   "hero",
+   "split",
+   "rows",
+   "table",
+   "split",
+   "table",
+   "split"
+  ],
+  "signature": "one heavy week on the printed sheet, nights and rides on one line",
+  "waived": [
+   "77",
+   "84"
+  ],
+  "prompt": "Cairn site",
+  "date": "2026-10-27"
+ }
+]
