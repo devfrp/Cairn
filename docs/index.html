@@ -6,6 +6,7 @@
 <title>Cairn : vos données Garmin et Strava, réunies chez vous</title>
 <meta name="description" content="Application de bureau qui réunit vos données Garmin et Strava dans un fichier qui vous appartient, et rapproche récupération et charge d’entraînement.">
 <link rel="icon" href="assets/cairn.svg" type="image/svg+xml">
+<script>try{var m=localStorage.getItem("mode");if(m==="dark"||m==="light")document.documentElement.dataset.mode=m}catch(e){}</script>
 <link rel="stylesheet" href="assets/style.css">
 <link rel="alternate" hreflang="en" href="en/">
 <link rel="alternate" hreflang="fr" href="./">
@@ -18,11 +19,17 @@
       <img src="assets/cairn.svg" alt="" width="32" height="32">
       <span>Cairn</span>
     </a>
+    <div class="bar-end">
     <nav class="bar-nav" aria-label="Navigation">
       <a href="#telechargements">Télécharger</a>
       <a href="https://github.com/devfrp/Cairn">GitHub</a>
       <a href="en/" hreflang="en">EN</a>
     </nav>
+    <div class="mode-toggle" role="group" aria-label="Apparence" hidden>
+      <button class="mode-opt" type="button" data-mode-set="light">Clair</button>
+      <button class="mode-opt" type="button" data-mode-set="dark">Sombre</button>
+    </div>
+    </div>
   </div>
 </header>
 
@@ -83,6 +90,20 @@
         <li><h3>Application de bureau</h3><p>Une fenêtre pour relier vos comptes, lancer une synchronisation et voir l’essentiel. Rien à installer à côté : posez-la sur une clé USB, elle emporte ses réglages et ses données.</p></li>
         <li><h3>Analyse seconde par seconde</h3><p>Vos fichiers <code>.fit</code> sont décodés point par point : temps réellement passé dans chaque zone de fréquence cardiaque, dérive cardiaque, lecture fine d’une sortie.</p></li>
       </ul>
+    </div>
+  </section>
+
+  <section class="sec sec--l" id="apercu">
+    <div class="container">
+      <div class="head">
+        <h2>À quoi ressemble l’application ?</h2>
+        <p class="lead">Le tableau de bord : la récupération de la nuit en face de l’entraînement, sur huit semaines.</p>
+      </div>
+      <figure class="app-shot">
+        <img class="only-light" src="assets/app-tableau-de-bord.png" width="1440" height="874" loading="lazy" alt="Le tableau de bord de Cairn : variabilité cardiaque, sommeil, fréquence de repos, pas, puis les tendances sur huit semaines.">
+        <img class="only-dark" src="assets/app-tableau-de-bord-dark.png" width="1440" height="874" loading="lazy" alt="Le tableau de bord de Cairn : variabilité cardiaque, sommeil, fréquence de repos, pas, puis les tendances sur huit semaines.">
+        <figcaption>La vraie application, sur des données inventées pour l’exemple.</figcaption>
+      </figure>
     </div>
   </section>
 
@@ -168,5 +189,27 @@
     </ul>
   </div>
 </footer>
+<script>
+(function(){
+  var root = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)');
+  var opts = document.querySelectorAll('[data-mode-set]');
+  function current(){ return root.dataset.mode || (dark.matches ? 'dark' : 'light'); }
+  function sync(){
+    var mode = current();
+    opts.forEach(function(b){
+      b.classList.toggle('active', b.dataset.modeSet === mode);
+      b.setAttribute('aria-pressed', String(b.dataset.modeSet === mode));
+    });
+  }
+  opts.forEach(function(b){ b.addEventListener('click', function(){
+    root.dataset.mode = b.dataset.modeSet;
+    try { localStorage.setItem('mode', b.dataset.modeSet); } catch (e) {}
+    sync();
+  }); });
+  document.querySelectorAll('.mode-toggle').forEach(function(g){ g.hidden = false; });
+  dark.addEventListener('change', sync);
+  sync();
+})();
+</script>
 </body>
 </html>

@@ -2039,6 +2039,7 @@ class TestObjectifHebdomadaire:
         from PySide6.QtCore import QSize
         from PySide6.QtGui import QImage
 
+        from cairn.gui import theme
         from cairn.gui.widgets import ColumnChart
 
         def hauteur_coloree(cible):
@@ -2051,7 +2052,7 @@ class TestObjectifHebdomadaire:
             graphe.render(image)
             return sum(
                 1 for y in range(140) for x in range(400)
-                if image.pixelColor(x, y).name() == "#e8834a"
+                if image.pixelColor(x, y).name() == theme.ACCENT.lower()
             )
 
         assert hauteur_coloree(900.0) < hauteur_coloree(None)

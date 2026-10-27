@@ -6,6 +6,7 @@
 <title>Cairn: your Garmin and Strava data, together, at home</title>
 <meta name="description" content="Desktop app that brings your Garmin and Strava data together in a file you own, and sets recovery against training load.">
 <link rel="icon" href="../assets/cairn.svg" type="image/svg+xml">
+<script>try{var m=localStorage.getItem("mode");if(m==="dark"||m==="light")document.documentElement.dataset.mode=m}catch(e){}</script>
 <link rel="stylesheet" href="../assets/style.css">
 <link rel="alternate" hreflang="en" href="./">
 <link rel="alternate" hreflang="fr" href="../">
@@ -18,11 +19,17 @@
       <img src="../assets/cairn.svg" alt="" width="32" height="32">
       <span>Cairn</span>
     </a>
+    <div class="bar-end">
     <nav class="bar-nav" aria-label="Navigation">
       <a href="#downloads">Download</a>
       <a href="https://github.com/devfrp/Cairn">GitHub</a>
       <a href="../" hreflang="fr">FR</a>
     </nav>
+    <div class="mode-toggle" role="group" aria-label="Appearance" hidden>
+      <button class="mode-opt" type="button" data-mode-set="light">Light</button>
+      <button class="mode-opt" type="button" data-mode-set="dark">Dark</button>
+    </div>
+    </div>
   </div>
 </header>
 
@@ -83,6 +90,20 @@
         <li><h3>Desktop application</h3><p>One window to link your accounts, run a sync and see what matters. Nothing to install alongside: put it on a USB stick and it carries its settings and its data with it.</p></li>
         <li><h3>Second-by-second analysis</h3><p>Your <code>.fit</code> files are decoded point by point: time actually spent in each heart rate zone, cardiac drift, a close read of any ride.</p></li>
       </ul>
+    </div>
+  </section>
+
+  <section class="sec sec--l" id="apercu">
+    <div class="container">
+      <div class="head">
+        <h2>What does the app look like?</h2>
+        <p class="lead">The dashboard: last night’s recovery set against training, over eight weeks.</p>
+      </div>
+      <figure class="app-shot">
+        <img class="only-light" src="../assets/app-tableau-de-bord.png" width="1440" height="874" loading="lazy" alt="The Cairn dashboard: heart rate variability, sleep, resting heart rate, steps, then eight weeks of trends.">
+        <img class="only-dark" src="../assets/app-tableau-de-bord-dark.png" width="1440" height="874" loading="lazy" alt="The Cairn dashboard: heart rate variability, sleep, resting heart rate, steps, then eight weeks of trends.">
+        <figcaption>The real application, on data made up for the example.</figcaption>
+      </figure>
     </div>
   </section>
 
@@ -168,5 +189,27 @@
     </ul>
   </div>
 </footer>
+<script>
+(function(){
+  var root = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)');
+  var opts = document.querySelectorAll('[data-mode-set]');
+  function current(){ return root.dataset.mode || (dark.matches ? 'dark' : 'light'); }
+  function sync(){
+    var mode = current();
+    opts.forEach(function(b){
+      b.classList.toggle('active', b.dataset.modeSet === mode);
+      b.setAttribute('aria-pressed', String(b.dataset.modeSet === mode));
+    });
+  }
+  opts.forEach(function(b){ b.addEventListener('click', function(){
+    root.dataset.mode = b.dataset.modeSet;
+    try { localStorage.setItem('mode', b.dataset.modeSet); } catch (e) {}
+    sync();
+  }); });
+  document.querySelectorAll('.mode-toggle').forEach(function(g){ g.hidden = false; });
+  dark.addEventListener('change', sync);
+  sync();
+})();
+</script>
 </body>
 </html>

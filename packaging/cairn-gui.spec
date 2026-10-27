@@ -30,6 +30,7 @@ VENDOR = ROOT / "packaging" / "vendor"
 datas = [
     (str(ROOT / "db" / "migrations"), "db/migrations"),
     (str(ROOT / "packaging" / "cairn.svg"), "."),
+    (str(ROOT / "src" / "cairn" / "gui" / "fonts"), "cairn/gui/fonts"),
 ]
 
 # Moteur et modèle embarqués, quand ils ont été préparés.
@@ -162,7 +163,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Cairn",
             "CFBundleDisplayName": "Cairn",
-            "CFBundleShortVersionString": "0.1.4",
+            "CFBundleShortVersionString": "0.2.0",
             "NSHighResolutionCapable": True,
             "LSUIElement": False,
         },

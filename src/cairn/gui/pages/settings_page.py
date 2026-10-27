@@ -197,6 +197,22 @@ class SettingsPage(QWidget):
         detail.setObjectName("CardHint")
         detail.setWordWrap(True)
         card.layout().addWidget(detail)
+
+        self.theme_mode = QComboBox()
+        for cle, libelle in (("auto", "Comme le système"), ("light", "Clair"),
+                             ("dark", "Sombre")):
+            self.theme_mode.addItem(libelle, cle)
+        self.theme_mode.setCurrentIndex(max(0, self.theme_mode.findData(theme.stored_mode())))
+        # Enregistré au choix, comme la case ci-dessus.
+        self.theme_mode.currentIndexChanged.connect(
+            lambda _i: prefs.save_view("theme", self.theme_mode.currentData())
+        )
+        card.layout().addWidget(field_row("Apparence", self.theme_mode))
+
+        apparence = QLabel("Le changement d'apparence prend effet au prochain démarrage.")
+        apparence.setObjectName("CardHint")
+        apparence.setWordWrap(True)
+        card.layout().addWidget(apparence)
         return card
 
     # -- objectif --------------------------------------------------------

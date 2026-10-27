@@ -434,6 +434,25 @@ class TestLecturesDuTableauDeBord:
         assert recuperation.sleep_score is None
         assert recuperation.sleep_duration_s == 28800
 
+    def test_jour_de_la_vfc_est_une_date(self, base):
+        """Le jour vient du calendrier, une colonne calculée que SQLite rend en
+        texte : le tableau de bord le soustrait à aujourd'hui et plantait."""
+        import datetime as dt
+
+        from cairn.gui import queries
+
+        db.execute("INSERT INTO athlete (id, display_name) VALUES (1, 'test')")
+        db.execute(
+            """INSERT INTO hrv_night (athlete_id, day, avg_hrv_ms, status)
+               VALUES (1, date('now','localtime','-1 day'), 61.5, 'BALANCED')"""
+        )
+
+        recuperation = queries.recovery()
+
+        assert recuperation.hrv == 61.5
+        assert isinstance(recuperation.day, dt.date)
+        assert recuperation.day == dt.date.today() - dt.timedelta(days=1)
+
 
 class TestUsureDuMateriel:
     """Une chaîne se change tous les trois mille kilomètres, pas le vélo.

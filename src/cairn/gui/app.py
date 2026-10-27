@@ -382,6 +382,7 @@ def garmin_login_only() -> int:
     prepare_webengine()
 
     app = QApplication(sys.argv)
+    theme.load_fonts()
     app.setStyleSheet(theme.STYLESHEET)
 
     from cairn.gui.garmin_login import GarminLoginDialog
@@ -422,6 +423,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Cairn")
     app.setOrganizationName("Cairn")
+    theme.load_fonts()
     app.setStyleSheet(theme.STYLESHEET)
 
     path = icon_path()

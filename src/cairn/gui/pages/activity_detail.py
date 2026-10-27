@@ -53,7 +53,7 @@ ZONES = {
     5: "Zone 5 · maximal",
 }
 
-COULEURS_ZONES = ("#6b9bd2", "#5fa87a", "#d9a441", "#e8834a", "#d9614b")
+COULEURS_ZONES = theme.ZONES
 
 
 
@@ -143,7 +143,7 @@ class ActivityDetailDialog(QDialog):
         grille.setSpacing(10)
         for index, (libelle, valeur) in enumerate(valeurs):
             carte = Card()
-            titre = QLabel(libelle.upper())
+            titre = QLabel(libelle)
             titre.setObjectName("CardTitle")
             chiffre = QLabel(valeur)
             chiffre.setObjectName("CardValue")

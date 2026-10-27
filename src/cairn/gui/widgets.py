@@ -37,7 +37,7 @@ class StatCard(Card):
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.title = QLabel(title.upper())
+        self.title = QLabel(title)
         self.title.setObjectName("CardTitle")
         self.value = QLabel("—")
         self.value.setObjectName("CardValue")

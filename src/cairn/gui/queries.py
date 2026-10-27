@@ -161,7 +161,8 @@ def recovery(days: int = 30) -> Recovery:
         if result.hrv is None and entry["avg_hrv_ms"] is not None:
             result.hrv = float(entry["avg_hrv_ms"])
             result.hrv_status = entry["status"]
-            result.day = entry["day"]
+            # Colonne calculée (le calendrier) : SQLite la rend en texte.
+            result.day = dt.date.fromisoformat(str(entry["day"]))
         if result.resting_hr is None and entry["resting_hr"] is not None:
             result.resting_hr = entry["resting_hr"]
         if result.sleep_score is None and entry["sleep_score"] is not None:

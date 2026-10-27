@@ -227,7 +227,7 @@ class ActivityCompareDialog(QDialog):
         allure égale est un progrès. Zéro s'abstient de juger.
         """
         carte = Card()
-        titre = QLabel(libelle.upper())
+        titre = QLabel(libelle)
         titre.setObjectName("CardTitle")
         carte.layout().addWidget(titre)
 

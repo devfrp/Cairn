@@ -20,3 +20,25 @@
   --radius-card: 0; --radius-pill: 2px; --rule-hair: 1px; --rule-bar: 2px; --shadow-card: none;
   --tracking-display: -0.02em; --display-weight: 600;
 }
+
+/* Mode sombre : re-dérivé du clair (jamais inversé), même teinte d'ancrage. */
+[data-mode="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(19% 0.012 245); --color-paper-2: oklch(22% 0.012 245); --color-paper-3: oklch(25% 0.012 245);
+  --color-ink: oklch(93% 0.008 245); --color-ink-2: oklch(85% 0.010 245); --color-muted: oklch(71% 0.014 245);
+  --color-rule: oklch(34% 0.013 240); --color-rule-2: oklch(80% 0.012 240);
+  --color-accent: oklch(70% 0.15 350); --color-accent-2: oklch(62% 0.15 350); --color-accent-ink: oklch(16% 0.02 245); --color-focus: oklch(73% 0.16 350);
+  --color-sheet: oklch(24% 0.010 245);
+  --color-error: oklch(68% 0.17 27); --color-success: oklch(72% 0.13 150);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) {
+    color-scheme: dark;
+    --color-paper: oklch(19% 0.012 245); --color-paper-2: oklch(22% 0.012 245); --color-paper-3: oklch(25% 0.012 245);
+    --color-ink: oklch(93% 0.008 245); --color-ink-2: oklch(85% 0.010 245); --color-muted: oklch(71% 0.014 245);
+    --color-rule: oklch(34% 0.013 240); --color-rule-2: oklch(80% 0.012 240);
+    --color-accent: oklch(70% 0.15 350); --color-accent-2: oklch(62% 0.15 350); --color-accent-ink: oklch(16% 0.02 245); --color-focus: oklch(73% 0.16 350);
+    --color-sheet: oklch(24% 0.010 245);
+    --color-error: oklch(68% 0.17 27); --color-success: oklch(72% 0.13 150);
+  }
+}

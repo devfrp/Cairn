@@ -31,7 +31,7 @@ from cairn.gui.widgets import (
 from cairn.text import pluriel
 
 # Une couleur par zone, du calme à l'intense.
-ZONE_COLOURS = ("#6b9bd2", "#5fa87a", "#d9a441", "#e8834a", "#d9614b")
+ZONE_COLOURS = theme.ZONES
 
 ZONE_LABELS = {
     1: "Zone 1 · récup",

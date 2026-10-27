@@ -1,6 +1,6 @@
 /* Hallmark · shape: Conversational FAQ · genre: editorial · theme: Almanac (deal 2/3, seed desktop-app-brings-garmin-48ce·a8651fa8·2026-10-27·r0) · redesign: full · job: try · draw: 9af6b9
  * hero: Stage (swapped from a Banner: the printed week is the strongest thing the page has, so it takes seven columns beside the head) · nav: edge-aligned (swapped from a search-led bar: the page has nothing to search) · footer: colophon block (swapped from index columns: two real links, no sitemap) · imagery: the product built as a sample sheet, labelled as an example · signature: one heavy week on the printed sheet, the nights from Garmin and the rides from Strava on the same line, the overloaded Friday in magenta
- * axes: mid/grotesk-sans/chromatic-magenta · posture: restrained · contrast: pass · fold: pass · v2.0.0 */
+ * axes: mid/grotesk-sans/chromatic-magenta · posture: restrained · contrast: pass · fold: pass · modes: light+dark · v2.0.0 */
 /* Hallmark · pre-emit critique: P5 H4 E4 S5 R4 V5 · weakest: R, long owner prose; it is split where its own sentences split (who sees what, the file) and set at a reading measure */
 /* Hallmark · Cairn’s rule holds: no external resource. The three faces are served from assets/fonts beside this file, so the page still loads no font or script from anywhere else */
 /* Hallmark · reworded the heads "Le problème", "Ce que ça fait", "Où en est le projet", "Premier démarrage", "Télécharger l’application", "Vos données restent chez vous" to the questions "Pourquoi Cairn ?", "Que fait-il ?", "Où en est le projet ?", "Et au premier lancement ?", "Où le télécharger ?", "Où vont mes données ?" (EN likewise) · the Conversational FAQ shape heads each section with its question */
@@ -32,6 +32,19 @@ p:not([class]) { max-width: 64ch; }
 .bar-nav { display: flex; gap: var(--space-xs); }
 .bar-nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-sm); font: 500 var(--text-sm)/1 var(--font-display); text-decoration: none; transition: background-color var(--dur-micro) var(--ease-out); }
 .bar-nav a:hover { background: var(--color-paper-2); }
+.bar-end { display: flex; align-items: center; gap: var(--space-sm); }
+.mode-toggle { display: flex; border: var(--rule-hair) solid var(--color-rule-2); }
+.mode-opt { min-height: 44px; padding: 0 var(--space-sm); border: 0; border-radius: 0; background: transparent; color: var(--color-muted); font: 500 var(--text-sm)/1 var(--font-display); cursor: pointer; transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out); }
+.mode-opt:hover { color: var(--color-ink); background: var(--color-paper-2); }
+.mode-opt:active { background: var(--color-paper-3); }
+.mode-opt.active { background: var(--color-ink); color: var(--color-paper); }
+/* the real app: a capture that follows the page's mode */
+.app-shot { margin: 0; }
+.app-shot img { width: 100%; height: auto; border-top: var(--rule-bar) solid var(--color-ink); }
+.app-shot figcaption { margin-top: var(--space-sm); font: italic 400 var(--text-sm)/1.4 var(--font-body); color: var(--color-muted); }
+.only-dark { display: none !important; }
+[data-mode="dark"] .only-dark { display: block !important; } [data-mode="dark"] .only-light { display: none !important; }
+@media (prefers-color-scheme: dark) { :root:not([data-mode]) .only-dark { display: block !important; } :root:not([data-mode]) .only-light { display: none !important; } }
 
 /* hero, Stage with the sheet */
 .hero { border-bottom: var(--rule-hair) solid var(--color-rule); }
@@ -133,5 +146,11 @@ p:not([class]) { max-width: 64ch; }
   .bar-inner { gap: var(--space-sm); }
   .bar-nav { gap: 0; }
   .bar-nav a { padding: 0 var(--space-xs); }
+  .bar-end { gap: var(--space-2xs); }
+  .mode-opt { padding: 0 var(--space-xs); }
   .brand { font-size: var(--text-lg); }
+}
+@media (max-width: 40rem) {
+  .bar-inner { flex-wrap: wrap; row-gap: 0; padding-block: var(--space-xs); }
+  .bar-end { flex-basis: 100%; justify-content: space-between; }
 }
